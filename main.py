@@ -1,24 +1,37 @@
 import sys
-
+import traceback
 from typing import Optional
 
-from PyQt5.QtCore import QPoint, Qt
+import pandas as pd
+import xlwings as xw
+from PyQt5.QtCore import QObject, QPoint, Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QMouseEvent
-from PyQt5.QtCore import QObject, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
-	QApplication,
-	QFrame,
-	QHBoxLayout,
-	QLabel,
-	QPushButton,
-	QSizePolicy,
-	QToolButton,
-	QVBoxLayout,
-	QWidget,
+    QApplication,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
 )
+
+import matplotlib
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
+from matplotlib.figure import Figure
+
+from plotbox import render_box_and_scatter_chart
+
+try:
+	import pythoncom as _pythoncom
+except Exception:
+	_pythoncom = None
 
 
 class ExcelFetchWorker(QObject):
+
 	finished = pyqtSignal(object, dict)  # pandas.DataFrame, metadata dict
 	failed = pyqtSignal(str)
 
@@ -26,17 +39,12 @@ class ExcelFetchWorker(QObject):
 		super().__init__()
 
 	def run(self):
-		pythoncom = None
 		try:
-			import traceback
-			try:
-				import pythoncom 
-				pythoncom.CoInitialize()
-			except Exception:
-				pythoncom = None
-
-			import xlwings as xw  
-			import pandas as pd  
+			if _pythoncom is not None:
+				try:
+					_pythoncom.CoInitialize()
+				except Exception:
+					pass
 
 			app = xw.apps.active
 			if app is None:
@@ -107,12 +115,16 @@ class ExcelFetchWorker(QObject):
 				print(df)
 			except Exception:
 				pass
-				
+
 			meta = {
 				"book_name": getattr(book, "name", "未知表"),
-				"sheet_name": getattr(selection.sheet, "name", "未知页") if hasattr(selection, "sheet") else "未知页",
+				"sheet_name": (
+					getattr(selection.sheet, "name", "未知页")
+					if hasattr(selection, "sheet")
+					else "未知页"
+				),
 				"address": getattr(selection, "address", "未知选区"),
-				"filepath": getattr(book, "fullname", "")
+				"filepath": getattr(book, "fullname", ""),
 			}
 			self.finished.emit(df, meta)
 		except Exception as exc:
@@ -123,14 +135,15 @@ class ExcelFetchWorker(QObject):
 				pass
 			self.failed.emit(str(exc))
 		finally:
-			if pythoncom is not None:
+			if _pythoncom is not None:
 				try:
-					pythoncom.CoUninitialize()
+					_pythoncom.CoUninitialize()
 				except Exception:
 					pass
 
 
 class FloatingToolWindow(QWidget):
+
 	def __init__(self):
 		super().__init__()
 
@@ -146,11 +159,7 @@ class FloatingToolWindow(QWidget):
 
 	def _init_window(self) -> None:
 		self.setWindowTitle("EXCEL快速分析")
-		self.setWindowFlags(
-			Qt.Window
-			| Qt.FramelessWindowHint
-			| Qt.WindowStaysOnTopHint
-		)
+		self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
 		self.setMinimumSize(250, 100)
 		self.resize(250, 120)
 
@@ -165,7 +174,9 @@ class FloatingToolWindow(QWidget):
 		top_layout.setSpacing(8)
 
 		self.status_label = QLabel("就绪", self.top_bar)
-		self.status_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+		self.status_label.setSizePolicy(
+			QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+		)
 
 		self.pin_button = QToolButton(self.top_bar)
 		self.pin_button.setCheckable(True)
@@ -226,17 +237,17 @@ class FloatingToolWindow(QWidget):
 
 	def _on_excel_fetch_success(self, df, meta) -> None:
 		self._last_df = df
-		
+
 		# 更新悬浮窗的信息
 		book_name = meta.get("book_name", "未知")
 		address = meta.get("address", "未知")
 		filepath = meta.get("filepath", "")
-		
+
 		info_text = f"文件: {book_name}\n范围: {address}"
 		if filepath:
 			info_text += f"\n路径: {filepath}"
 		self.info_label.setText(info_text)
-		
+
 		try:
 			print(df)
 		except Exception:
@@ -279,15 +290,17 @@ class FloatingToolWindow(QWidget):
 		if event.button() == Qt.LeftButton:
 			if not self._hit_interactive_widget(event.pos()):
 				self._drag_active = True
-				self._drag_offset = (
-					event.globalPos() - self.frameGeometry().topLeft()
-				)
+				self._drag_offset = event.globalPos() - self.frameGeometry().topLeft()
 				event.accept()
 				return
 		super().mousePressEvent(event)
 
 	def mouseMoveEvent(self, event: QMouseEvent) -> None:
-		if self._drag_active and (event.buttons() & Qt.LeftButton) and self._drag_offset is not None:
+		if (
+			self._drag_active
+			and (event.buttons() & Qt.LeftButton)
+			and self._drag_offset is not None
+		):
 			self.move(event.globalPos() - self._drag_offset)
 			event.accept()
 			return
@@ -313,66 +326,70 @@ class FloatingToolWindow(QWidget):
 		super().closeEvent(event)
 
 	def _show_chart_window(self, df, meta) -> None:
-		import matplotlib
-		from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-		from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
-		from matplotlib.figure import Figure
-		
 		# 设置中文字体支持
-		matplotlib.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'SimSun', 'Arial Unicode MS']
-		matplotlib.rcParams['axes.unicode_minus'] = False
-		
+		matplotlib.rcParams["font.sans-serif"] = [
+			"Microsoft YaHei",
+			"SimHei",
+			"SimSun",
+			"Arial Unicode MS",
+		]
+		matplotlib.rcParams["axes.unicode_minus"] = False
+
 		# 当图表数据量较大时，自动计算动态图表大小
 		num_cols = df.shape[1]
 		fig_width = max(8, num_cols * 1.5)
-		
+
 		chart_win = QWidget()
 		chart_win.setAttribute(Qt.WA_DeleteOnClose)
-		chart_win.setWindowTitle(f"分析图表 - {meta.get('book_name', '')} | 范围: {meta.get('address', '')}")
-		
+		chart_win.setWindowTitle(
+			f"分析图表 - {meta.get('book_name', '')} | 范围: {meta.get('address', '')}"
+		)
+
 		# 设定窗口大小并显示
 		chart_win.resize(int(fig_width * 100), 600)
 		layout = QVBoxLayout(chart_win)
-		
+
 		fig = Figure(figsize=(fig_width, 6), dpi=100)
 		canvas = FigureCanvas(fig)
-		
+
 		# 添加 Matplotlib 工具栏（自带缩放、保存等功能）
 		toolbar = NavigationToolbar(canvas, chart_win)
 		layout.addWidget(toolbar)
 		layout.addWidget(canvas, 1)
-		
+
 		ax = fig.add_subplot(111)
-		
+
 		try:
-			from plotbox import render_box_and_scatter_chart
-			render_box_and_scatter_chart(ax, df, sheet_name=meta.get("sheet_name", "Data"))
+			render_box_and_scatter_chart(
+				ax, df, sheet_name=meta.get("sheet_name", "Data")
+			)
 		except Exception as exc:
-			ax.text(0.5, 0.5, f"作图失败: {exc}", ha='center', va='center')
+			ax.text(0.5, 0.5, f"作图失败: {exc}", ha="center", va="center")
 			print(f"[UI] plotbox render failed: {exc}")
-			
+
 		try:
 			fig.tight_layout()
 		except Exception:
 			pass
-			
+
 		chart_win.show()
-		
+
 		# 注册销毁事件清理引用，防止内存泄露
 		def on_destroyed():
 			if chart_win in self._chart_windows:
 				self._chart_windows.remove(chart_win)
+
 		chart_win.destroyed.connect(on_destroyed)
-		
+
 		self._chart_windows.append(chart_win)
 
 
 def main():
-	app = QApplication(sys.argv)
-	window = FloatingToolWindow()
-	window.show()
-	return app.exec()
+    app = QApplication(sys.argv)
+    window = FloatingToolWindow()
+    window.show()
+    return app.exec()
 
 
 if __name__ == "__main__":
-	raise SystemExit(main())
+    raise SystemExit(main())
