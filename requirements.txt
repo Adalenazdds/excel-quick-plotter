@@ -1,0 +1,6 @@
+PyQt5
+matplotlib
+pandas
+numpy
+xlwings
+pywin32; platform_system == "Windows"

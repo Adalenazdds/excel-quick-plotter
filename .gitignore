@@ -1,0 +1,31 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging / build
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDE / editor
+.idea/
+.vscode/
+
+# Caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS / Office temp files
+.DS_Store
+Thumbs.db
+~$*.xlsx
+~$*.xlsm

@@ -8,6 +8,7 @@ from PyQt5.QtCore import QObject, QPoint, Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QMouseEvent
 from PyQt5.QtWidgets import (
     QApplication,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -22,374 +23,524 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 
+# 确保你的同级目录下有 plotbox.py
 from plotbox import render_box_and_scatter_chart
 
 try:
-	import pythoncom as _pythoncom
+    import pythoncom as _pythoncom
 except Exception:
-	_pythoncom = None
+    _pythoncom = None
 
 
 class ExcelFetchWorker(QObject):
+    finished = pyqtSignal(object, dict)  # pandas.DataFrame, metadata dict
+    failed = pyqtSignal(str)
 
-	finished = pyqtSignal(object, dict)  # pandas.DataFrame, metadata dict
-	failed = pyqtSignal(str)
+    def __init__(self):
+        super().__init__()
 
-	def __init__(self):
-		super().__init__()
+    def run(self):
+        try:
+            if _pythoncom is not None:
+                try:
+                    _pythoncom.CoInitialize()
+                except Exception:
+                    pass
 
-	def run(self):
-		try:
-			if _pythoncom is not None:
-				try:
-					_pythoncom.CoInitialize()
-				except Exception:
-					pass
+            app = xw.apps.active
+            if app is None:
+                raise RuntimeError(
+                    "xlwings 未检测到活动 Excel 实例（常见原因：Excel 以管理员运行/不是微软 Excel/WPS/不同用户会话）"
+                )
 
-			app = xw.apps.active
-			if app is None:
-				raise RuntimeError(
-					"xlwings 未检测到活动 Excel 实例（常见原因：Excel 以管理员运行/不是微软 Excel/WPS/不同用户会话）"
-				)
+            book = app.books.active
+            selection = book.app.selection
+            values = selection.options(ndim=2).value
+            if values is None:
+                raise ValueError("empty selection")
 
-			book = app.books.active
-			selection = book.app.selection
-			values = selection.options(ndim=2).value
-			if values is None:
-				raise ValueError("empty selection")
+            # 选区可能是空白区域
+            has_any_value = False
+            try:
+                for row in values:
+                    for cell in row:
+                        if cell is None:
+                            continue
+                        if isinstance(cell, str) and cell.strip() == "":
+                            continue
+                        has_any_value = True
+                        break
+                    if has_any_value:
+                        break
+            except Exception:
+                has_any_value = True
 
-			# 1) 打印活动 Excel/工作簿/选区信息（尽量使用基础属性，避免版本差异）
-			try:
-				book_name = getattr(book, "name", None)
-				addr = None
-				try:
-					addr = selection.address
-				except Exception:
-					addr = None
-				print("[Excel] Active workbook:", book_name)
-				if addr:
-					print("[Excel] Selection address:", addr)
-			except Exception:
-				pass
+            if not has_any_value:
+                raise ValueError("empty selection")
 
-			# 2) 打印选区中的数值（数字类型）
-			try:
-				numbers = []
-				for row in values:
-					for cell in row:
-						if isinstance(cell, bool):
-							continue
-						if isinstance(cell, (int, float)):
-							# 过滤 NaN
-							if isinstance(cell, float) and cell != cell:
-								continue
-							numbers.append(cell)
-				print("[Excel] Selected numeric values:")
-				print(numbers)
-			except Exception:
-				pass
+            df = pd.DataFrame(values)
 
-			# 选区可能是空白区域：例如选到一大片空单元格时，values 会是 [[None], ...]
-			has_any_value = False
-			try:
-				for row in values:
-					for cell in row:
-						if cell is None:
-							continue
-						if isinstance(cell, str) and cell.strip() == "":
-							continue
-						has_any_value = True
-						break
-					if has_any_value:
-						break
-			except Exception:
-				has_any_value = True
-
-			if not has_any_value:
-				raise ValueError("empty selection")
-
-			df = pd.DataFrame(values)
-			try:
-				# 兼容性输出：保留 DataFrame 供后续作图使用
-				print("[Excel] DataFrame preview:")
-				print(df)
-			except Exception:
-				pass
-
-			meta = {
-				"book_name": getattr(book, "name", "未知表"),
-				"sheet_name": (
-					getattr(selection.sheet, "name", "未知页")
-					if hasattr(selection, "sheet")
-					else "未知页"
-				),
-				"address": getattr(selection, "address", "未知选区"),
-				"filepath": getattr(book, "fullname", ""),
-			}
-			self.finished.emit(df, meta)
-		except Exception as exc:
-			try:
-				print("[ExcelFetchWorker] failed:")
-				print(traceback.format_exc())
-			except Exception:
-				pass
-			self.failed.emit(str(exc))
-		finally:
-			if _pythoncom is not None:
-				try:
-					_pythoncom.CoUninitialize()
-				except Exception:
-					pass
+            meta = {
+                "book_name": getattr(book, "name", "未知表"),
+                "sheet_name": (
+                    getattr(selection.sheet, "name", "未知页")
+                    if hasattr(selection, "sheet")
+                    else "未知页"
+                ),
+                "address": getattr(selection, "address", "未知选区"),
+                "filepath": getattr(book, "fullname", ""),
+                "nrows": int(getattr(df, "shape", (0, 0))[0]),
+                "ncols": int(getattr(df, "shape", (0, 0))[1]),
+            }
+            self.finished.emit(df, meta)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+        finally:
+            if _pythoncom is not None:
+                try:
+                    _pythoncom.CoUninitialize()
+                except Exception:
+                    pass
 
 
 class FloatingToolWindow(QWidget):
 
-	def __init__(self):
-		super().__init__()
+    def __init__(self):
+        super().__init__()
 
-		self._drag_active = False
-		self._drag_offset = None  # type: Optional[QPoint]
-		self._excel_thread = None  # type: Optional[QThread]
-		self._excel_worker = None  # type: Optional[ExcelFetchWorker]
-		self._last_df = None
-		self._chart_windows = []
+        self._drag_active = False
+        self._drag_offset = None  # type: Optional[QPoint]
+        self._excel_thread = None  # type: Optional[QThread]
+        self._excel_worker = None  # type: Optional[ExcelFetchWorker]
+        self._last_df = None
+        self._chart_windows = []
 
-		self._init_window()
-		self._init_ui()
+        self._init_window()
+        self._init_ui()
 
-	def _init_window(self) -> None:
-		self.setWindowTitle("EXCEL快速分析")
-		self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-		self.setMinimumSize(250, 100)
-		self.resize(250, 120)
+    def _init_window(self) -> None:
+        self.setWindowTitle("EXCEL快速分析")
+        # 设置无边框、置顶
+        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        # 背景透明，为了能让内部的 QFrame 画出平滑的大圆角
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setMinimumSize(280, 150)
+        self.resize(300, 220)
 
-	def _init_ui(self) -> None:
-		root = QVBoxLayout(self)
-		root.setContentsMargins(10, 10, 10, 10)
-		root.setSpacing(10)
+    def _init_ui(self) -> None:
+        # ---- 1. 最外层透明容器与带圆角的主视窗 ----
+        base_layout = QVBoxLayout(self)
+        base_layout.setContentsMargins(10, 10, 10, 10)
 
-		self.top_bar = QWidget(self)
-		top_layout = QHBoxLayout(self.top_bar)
-		top_layout.setContentsMargins(0, 0, 0, 0)
-		top_layout.setSpacing(8)
+        self.main_frame = QFrame(self)
+        self.main_frame.setObjectName("MainFrame")
+        self.main_frame.setStyleSheet("""
+            QFrame#MainFrame {
+                background-color: #F8F9FA;
+                border-radius: 16px;
+                border: 1px solid #E9ECEF;
+            }
+        """)
+        base_layout.addWidget(self.main_frame)
 
-		self.status_label = QLabel("就绪", self.top_bar)
-		self.status_label.setSizePolicy(
-			QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-		)
+        # ---- 2. 主视窗内的核心布局 ----
+        root = QVBoxLayout(self.main_frame)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
 
-		self.pin_button = QToolButton(self.top_bar)
-		self.pin_button.setCheckable(True)
-		self.pin_button.setChecked(True)
-		self.pin_button.setToolTip("切换是否置顶")
-		self.pin_button.setAutoRaise(True)
-		self.pin_button.setFixedSize(28, 28)
-		self._apply_pin_visual(True)
-		self.pin_button.toggled.connect(self._set_always_on_top)
+        # -- 顶部状态栏 --
+        self.top_bar = QWidget(self.main_frame)
+        top_layout = QHBoxLayout(self.top_bar)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.status_label = QLabel("就绪 🎈", self.top_bar)
+        self.status_label.setStyleSheet("font-size:16px; font-weight:900; color:#2C3E50;")
+        self.status_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-		top_layout.addWidget(self.status_label)
-		top_layout.addWidget(self.pin_button)
-		root.addWidget(self.top_bar)
+        self.pin_button = QToolButton(self.top_bar)
+        self.pin_button.setCheckable(True)
+        self.pin_button.setChecked(True)
+        self.pin_button.setToolTip("切换是否置顶")
+        self.pin_button.setFixedSize(32, 32)
+        self.pin_button.setStyleSheet("""
+            QToolButton {
+                background-color: transparent; border-radius: 16px; font-size: 16px;
+            }
+            QToolButton:hover { background-color: #E2E8F0; }
+        """)
+        self._apply_pin_visual(True)
+        self.pin_button.toggled.connect(self._set_always_on_top)
 
-		self.info_label = QLabel("当前未提取数据\n请选中Excel数据区后点击底部按钮", self)
-		self.info_label.setWordWrap(True)
-		self.info_label.setStyleSheet("color: #555; font-size: 13px;")
-		self.info_label.setAlignment(Qt.AlignCenter)
-		root.addWidget(self.info_label, 1)
+        top_layout.addWidget(self.status_label)
+        top_layout.addWidget(self.pin_button)
+        root.addWidget(self.top_bar)
 
-		self.action_button = QPushButton("提取并作图", self)
-		self.action_button.clicked.connect(self._on_extract_plot_clicked)
-		root.addWidget(self.action_button)
+        # -- 信息展示卡片 --
+        self.info_card = QFrame(self.main_frame)
+        self.info_card.setObjectName("InfoCard")
+        self.info_card.setStyleSheet("""
+            QFrame#InfoCard {
+                background-color: #FFFFFF;
+                border-radius: 12px;
+            }
+        """)
+        info_layout = QVBoxLayout(self.info_card)
+        info_layout.setContentsMargins(12, 12, 12, 12)
+        info_layout.setSpacing(10)
 
-	def set_status(self, text: str) -> None:
-		self.status_label.setText(text)
+        self.info_title = QLabel("📊 当前活动选区", self.info_card)
+        self.info_title.setStyleSheet("font-size:14px; font-weight:800; color:#2C3E50;")
+        info_layout.addWidget(self.info_title)
 
-	def _apply_pin_visual(self, pinned: bool) -> None:
-		self.pin_button.setText("📌" if pinned else "📍")
+        self.info_hint = QLabel(self.info_card)
+        self.info_hint.setWordWrap(True)
+        self.info_hint.setStyleSheet("font-size:13px; color:#95A5A6;")
+        info_layout.addWidget(self.info_hint)
 
-	def _set_always_on_top(self, on: bool) -> None:
-		self._apply_pin_visual(on)
-		self.setWindowFlag(Qt.WindowStaysOnTopHint, on)
-		self.show()
+        # 1. 工作表（单药丸）
+        self.sheet_prefix, self.sheet_pill, _ = self._create_pill_row(
+            info_layout, "工作表：", "SheetPill", "#C3BEF0", "#312C57" 
+        )
+        
+        # 2. 范围（双药丸）
+        self.range_prefix, self.range_pill1, self.range_sep, self.range_pill2 = self._create_double_pill_row(
+            info_layout, "范    围：", "Range", "#A8E6CF", "#1A4D3A" 
+        )
+        
+        # 3. 单元格（双药丸）
+        self.cells_prefix, self.cells_pill1, self.cells_sep, self.cells_pill2 = self._create_double_pill_row(
+            info_layout, "单元格：", "Cells", "#FFD3B6", "#8A3C12" 
+        )
 
-	def _on_extract_plot_clicked(self) -> None:
-		if self._excel_thread is not None and self._excel_thread.isRunning():
-			return
+        # 路径展示
+        self.path_label = QLabel(self.info_card)
+        self.path_label.setWordWrap(True)
+        self.path_label.setStyleSheet("font-size:11px; color:#BDC3C7; font-family:Consolas, \"Courier New\";")
+        info_layout.addWidget(self.path_label)
 
-		self.set_status("读取中...")
-		self.action_button.setEnabled(False)
+        self._set_info_placeholder()
+        root.addWidget(self.info_card, 1)
 
-		thread = QThread(self)
-		worker = ExcelFetchWorker()
-		worker.moveToThread(thread)
+        # -- 底部高亮主按钮 --
+        self.action_button = QPushButton("✨ 提取并作图", self.main_frame)
+        self.action_button.setCursor(Qt.PointingHandCursor)
+        self.action_button.setStyleSheet("""
+            QPushButton {
+                background-color: #3DC2EC;
+                color: #FFFFFF;
+                font-size: 14px;
+                font-weight: bold;
+                border: none;
+                border-radius: 18px;
+                padding: 10px;
+            }
+            QPushButton:hover { background-color: #5ED1F4; }
+            QPushButton:pressed { background-color: #2BAAD4; }
+            QPushButton:disabled { background-color: #D1D8E0; color: #A5B1C2; }
+        """)
+        self.action_button.clicked.connect(self._on_extract_plot_clicked)
+        root.addWidget(self.action_button)
 
-		thread.started.connect(worker.run)
-		worker.finished.connect(self._on_excel_fetch_success)
-		worker.failed.connect(self._on_excel_fetch_failed)
-		worker.finished.connect(thread.quit)
-		worker.failed.connect(thread.quit)
-		thread.finished.connect(worker.deleteLater)
-		thread.finished.connect(thread.deleteLater)
+    def _create_pill_row(self, parent_layout, label_text, object_name, bg_color, text_color):
+        """辅助函数：创建单药丸布局"""
+        row_layout = QHBoxLayout()
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(6)
 
-		self._excel_thread = thread
-		self._excel_worker = worker
-		thread.start()
+        prefix = QLabel(label_text)
+        prefix.setFixedWidth(65)
+        prefix.setStyleSheet("font-size:13px; font-weight:700; color:#34495E;")
+        row_layout.addWidget(prefix)
 
-	def _on_excel_fetch_success(self, df, meta) -> None:
-		self._last_df = df
+        pill = QLabel()
+        pill.setAlignment(Qt.AlignCenter)
+        pill.setObjectName(object_name)
+        pill.setStyleSheet(f"""
+            QLabel#{object_name} {{
+                background-color: {bg_color};
+                color: {text_color};
+                font-size: 13px;
+                padding: 4px 18px;
+                border: 1px solid transparent;
+                border-radius: 12px;
+                min-height: 16px;
+            }}
+        """)
+        row_layout.addWidget(pill, 0, Qt.AlignVCenter)
 
-		# 更新悬浮窗的信息
-		book_name = meta.get("book_name", "未知")
-		address = meta.get("address", "未知")
-		filepath = meta.get("filepath", "")
+        suffix = QLabel()
+        suffix.setStyleSheet("font-size:12px; font-weight:600; color:#7F8C8D;")
+        row_layout.addWidget(suffix, 0, Qt.AlignVCenter)
+        
+        row_layout.addStretch(1)
+        parent_layout.addLayout(row_layout)
+        return prefix, pill, suffix
 
-		info_text = f"文件: {book_name}\n范围: {address}"
-		if filepath:
-			info_text += f"\n路径: {filepath}"
-		self.info_label.setText(info_text)
+    def _create_double_pill_row(self, parent_layout, label_text, obj_name_prefix, bg_color, text_color):
+        """辅助函数：创建带有冒号分隔的双药丸布局"""
+        row_layout = QHBoxLayout()
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(6)
 
-		try:
-			print(df)
-		except Exception:
-			pass
-		render_ok = True
-		try:
-			self._show_chart_window(df, meta)
-		except Exception as exc:
-			render_ok = False
-			try:
-				print("[UI] render chart failed:", repr(exc))
-			except Exception:
-				pass
-			self.set_status("作图失败")
-		if render_ok:
-			self.set_status("就绪")
-		self.action_button.setEnabled(True)
-		self._excel_thread = None
-		self._excel_worker = None
+        prefix = QLabel(label_text)
+        prefix.setFixedWidth(65)
+        prefix.setStyleSheet("font-size:13px; font-weight:700; color:#34495E;")
+        row_layout.addWidget(prefix)
 
-	def _on_excel_fetch_failed(self, _message: str) -> None:
-		try:
-			print("[UI] Excel fetch failed:", _message)
-		except Exception:
-			pass
-		self.set_status("未检测到有效数据")
-		self.action_button.setEnabled(True)
-		self._excel_thread = None
-		self._excel_worker = None
+        pill_style = f"""
+            QLabel {{
+                background-color: {bg_color};
+                color: {text_color};
+                font-size: 13px;
+                padding: 4px 14px;
+                border: 1px solid transparent;
+                border-radius: 12px;
+                min-height: 16px;
+            }}
+        """
 
-	def _hit_interactive_widget(self, local_pos: QPoint) -> bool:
-		widget = self.childAt(local_pos)
-		while widget is not None:
-			if widget in (self.pin_button, self.action_button):
-				return True
-			widget = widget.parentWidget()
-		return False
+        pill1 = QLabel()
+        pill1.setAlignment(Qt.AlignCenter)
+        pill1.setStyleSheet(pill_style)
+        row_layout.addWidget(pill1, 0, Qt.AlignVCenter)
 
-	def mousePressEvent(self, event: QMouseEvent) -> None:
-		if event.button() == Qt.LeftButton:
-			if not self._hit_interactive_widget(event.pos()):
-				self._drag_active = True
-				self._drag_offset = event.globalPos() - self.frameGeometry().topLeft()
-				event.accept()
-				return
-		super().mousePressEvent(event)
+        separator = QLabel(":")
+        separator.setStyleSheet("font-size:14px; font-weight:700; color:#34495E;")
+        row_layout.addWidget(separator, 0, Qt.AlignVCenter)
 
-	def mouseMoveEvent(self, event: QMouseEvent) -> None:
-		if (
-			self._drag_active
-			and (event.buttons() & Qt.LeftButton)
-			and self._drag_offset is not None
-		):
-			self.move(event.globalPos() - self._drag_offset)
-			event.accept()
-			return
-		super().mouseMoveEvent(event)
+        pill2 = QLabel()
+        pill2.setAlignment(Qt.AlignCenter)
+        pill2.setStyleSheet(pill_style)
+        row_layout.addWidget(pill2, 0, Qt.AlignVCenter)
 
-	def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-		if event.button() == Qt.LeftButton:
-			self._drag_active = False
-			self._drag_offset = None
-			event.accept()
-			return
-		super().mouseReleaseEvent(event)
+        row_layout.addStretch(1)
+        parent_layout.addLayout(row_layout)
+        return prefix, pill1, separator, pill2
 
-	def closeEvent(self, event) -> None:
-		thread = self._excel_thread
-		if thread is not None and thread.isRunning():
-			try:
-				thread.requestInterruption()
-			except Exception:
-				pass
-			thread.quit()
-			thread.wait(1500)
-		super().closeEvent(event)
+    def set_status(self, text: str) -> None:
+        self.status_label.setText(text)
 
-	def _show_chart_window(self, df, meta) -> None:
-		# 设置中文字体支持
-		matplotlib.rcParams["font.sans-serif"] = [
-			"Microsoft YaHei",
-			"SimHei",
-			"SimSun",
-			"Arial Unicode MS",
-		]
-		matplotlib.rcParams["axes.unicode_minus"] = False
+    def _apply_pin_visual(self, pinned: bool) -> None:
+        self.pin_button.setText("📌" if pinned else "📍")
 
-		# 当图表数据量较大时，自动计算动态图表大小
-		num_cols = df.shape[1]
-		fig_width = max(8, num_cols * 1.5)
+    def _set_always_on_top(self, on: bool) -> None:
+        self._apply_pin_visual(on)
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, on)
+        self.show()
 
-		chart_win = QWidget()
-		chart_win.setAttribute(Qt.WA_DeleteOnClose)
-		chart_win.setWindowTitle(
-			f"分析图表 - {meta.get('book_name', '')} | 范围: {meta.get('address', '')}"
-		)
+    def _on_extract_plot_clicked(self) -> None:
+        if self._excel_thread is not None and self._excel_thread.isRunning():
+            return
 
-		# 设定窗口大小并显示
-		chart_win.resize(int(fig_width * 100), 600)
-		layout = QVBoxLayout(chart_win)
+        self.set_status("🚀 读取中...")
+        self.action_button.setEnabled(False)
+        self.action_button.setText("读取中...")
 
-		fig = Figure(figsize=(fig_width, 6), dpi=100)
-		canvas = FigureCanvas(fig)
+        thread = QThread(self)
+        worker = ExcelFetchWorker()
+        worker.moveToThread(thread)
 
-		# 添加 Matplotlib 工具栏（自带缩放、保存等功能）
-		toolbar = NavigationToolbar(canvas, chart_win)
-		layout.addWidget(toolbar)
-		layout.addWidget(canvas, 1)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_excel_fetch_success)
+        worker.failed.connect(self._on_excel_fetch_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
 
-		ax = fig.add_subplot(111)
+        self._excel_thread = thread
+        self._excel_worker = worker
+        thread.start()
 
-		try:
-			render_box_and_scatter_chart(
-				ax, df, sheet_name=meta.get("sheet_name", "Data")
-			)
-		except Exception as exc:
-			ax.text(0.5, 0.5, f"作图失败: {exc}", ha="center", va="center")
-			print(f"[UI] plotbox render failed: {exc}")
+    def _on_excel_fetch_success(self, df, meta) -> None:
+        self._last_df = df
+        self._set_info_from_meta(meta)
 
-		try:
-			fig.tight_layout()
-		except Exception:
-			pass
+        render_ok = True
+        try:
+            self._show_chart_window(df, meta)
+        except Exception as exc:
+            render_ok = False
+            self.set_status("作图失败 ❌")
+            
+        if render_ok:
+            self.set_status("就绪 🎈")
+        self.action_button.setEnabled(True)
+        self.action_button.setText("✨ 提取并作图")
+        self._excel_thread = None
+        self._excel_worker = None
 
-		chart_win.show()
+    def _on_excel_fetch_failed(self, _message: str) -> None:
+        try:
+            print("[UI] Excel fetch failed:", _message)
+        except Exception:
+            pass
+        self.set_status("未检测到数据 ❌")
+        self.action_button.setEnabled(True)
+        self.action_button.setText("✨ 提取并作图")
+        self._excel_thread = None
+        self._excel_worker = None
 
-		# 注册销毁事件清理引用，防止内存泄露
-		def on_destroyed():
-			if chart_win in self._chart_windows:
-				self._chart_windows.remove(chart_win)
+    def _set_info_placeholder(self) -> None:
+        self.info_title.setText("等待框选数据...")
+        self.info_hint.setText("请在 Excel 中选中数据区域，然后点击下方按钮。")
 
-		chart_win.destroyed.connect(on_destroyed)
+        self.sheet_prefix.setVisible(False)
+        self.sheet_pill.setVisible(False)
+        
+        self.range_prefix.setVisible(False)
+        self.range_pill1.setVisible(False)
+        self.range_sep.setVisible(False)
+        self.range_pill2.setVisible(False)
+        
+        self.cells_prefix.setVisible(False)
+        self.cells_pill1.setVisible(False)
+        self.cells_sep.setVisible(False)
+        self.cells_pill2.setVisible(False)
+        
+        self.path_label.setVisible(False)
 
-		self._chart_windows.append(chart_win)
+    def _set_info_from_meta(self, meta: dict) -> None:
+        sheet_name = str(meta.get("sheet_name", "未知"))
+        address = str(meta.get("address", "未知"))
+        filepath = str(meta.get("filepath", ""))
+        nrows = meta.get("nrows")
+        ncols = meta.get("ncols")
+        try:
+            nrows_int = int(nrows) if nrows is not None else 0
+            ncols_int = int(ncols) if ncols is not None else 0
+        except Exception:
+            nrows_int, ncols_int = 0, 0
+
+        self.info_title.setText("📊 当前活动选区")
+        self.info_hint.setText("")
+        self.info_hint.setVisible(False)
+
+        # 统一显示所有基础元素
+        for widget in [self.sheet_prefix, self.sheet_pill, 
+                       self.range_prefix, self.range_pill1, self.range_sep, self.range_pill2,
+                       self.cells_prefix, self.cells_pill1, self.cells_sep, self.cells_pill2,
+                       self.path_label]:
+            widget.setVisible(True)
+
+        self.sheet_pill.setText(sheet_name)
+
+        # 解析并设置范围 (去掉 $ 符号，并通过 : 切割)
+        addr_clean = address.replace("$", "")
+        if ":" in addr_clean:
+            start_cell, end_cell = addr_clean.split(":", 1)
+            self.range_pill1.setText(start_cell)
+            self.range_pill2.setText(end_cell)
+        else:
+            self.range_pill1.setText(addr_clean)
+            self.range_pill2.setVisible(False)
+            self.range_sep.setVisible(False)
+
+        if nrows_int > 0 and ncols_int > 0:
+            self.cells_pill1.setText(f"{nrows_int}行")
+            self.cells_pill2.setText(f"{ncols_int}列")
+        else:
+            self.cells_pill1.setText("未知")
+            self.cells_pill2.setVisible(False)
+            self.cells_sep.setVisible(False)
+
+        self.path_label.setText(f"{filepath if filepath else '未获取路径'}")
+
+    def _hit_interactive_widget(self, local_pos: QPoint) -> bool:
+        widget = self.childAt(local_pos)
+        while widget is not None:
+            if widget in (self.pin_button, self.action_button):
+                return True
+            widget = widget.parentWidget()
+        return False
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton:
+            if not self._hit_interactive_widget(event.pos()):
+                self._drag_active = True
+                self._drag_offset = event.globalPos() - self.frameGeometry().topLeft()
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if (self._drag_active and (event.buttons() & Qt.LeftButton) and self._drag_offset is not None):
+            self.move(event.globalPos() - self._drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton:
+            self._drag_active = False
+            self._drag_offset = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def closeEvent(self, event) -> None:
+        thread = self._excel_thread
+        if thread is not None and thread.isRunning():
+            try:
+                thread.requestInterruption()
+            except Exception:
+                pass
+            thread.quit()
+            thread.wait(1500)
+        super().closeEvent(event)
+
+    def _show_chart_window(self, df, meta) -> None:
+        matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "SimSun", "Arial Unicode MS"]
+        matplotlib.rcParams["axes.unicode_minus"] = False
+
+        num_cols = df.shape[1]
+        fig_width = max(8, num_cols * 1.5)
+
+        chart_win = QWidget()
+        chart_win.setAttribute(Qt.WA_DeleteOnClose)
+        chart_win.setWindowTitle(f"分析图表 - {meta.get('book_name', '')} | 范围: {meta.get('address', '')}")
+        chart_win.resize(int(fig_width * 100), 600)
+        
+        layout = QVBoxLayout(chart_win)
+        fig = Figure(figsize=(fig_width, 6), dpi=100)
+        canvas = FigureCanvas(fig)
+
+        toolbar = NavigationToolbar(canvas, chart_win)
+        layout.addWidget(toolbar)
+        layout.addWidget(canvas, 1)
+
+        ax = fig.add_subplot(111)
+
+        try:
+            render_box_and_scatter_chart(ax, df, sheet_name=meta.get("sheet_name", "Data"))
+        except Exception as exc:
+            ax.text(0.5, 0.5, f"作图失败: {exc}", ha="center", va="center")
+            print(f"[UI] plotbox render failed: {exc}")
+
+        try:
+            fig.tight_layout()
+        except Exception:
+            pass
+
+        chart_win.show()
+
+        def on_destroyed():
+            if chart_win in self._chart_windows:
+                self._chart_windows.remove(chart_win)
+
+        chart_win.destroyed.connect(on_destroyed)
+        self._chart_windows.append(chart_win)
 
 
 def main():
+    # 启用高 DPI 缩放支持，让在现代屏幕上文字和圆角更清晰
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    
     app = QApplication(sys.argv)
     window = FloatingToolWindow()
     window.show()
     return app.exec()
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
