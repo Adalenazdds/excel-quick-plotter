@@ -17,11 +17,13 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from PyQt5.QtGui import QIcon
 
 import matplotlib
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
+
 
 # 确保你的同级目录下有 plotbox.py
 from plotbox import render_box_and_scatter_chart
@@ -120,12 +122,14 @@ class FloatingToolWindow(QWidget):
 
     def _init_window(self) -> None:
         self.setWindowTitle("EXCEL快速分析")
+        self.setWindowIcon(QIcon('EXCEL-Quick-Plotter.ico'))
         # 设置无边框、置顶
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         # 背景透明，为了能让内部的 QFrame 画出平滑的大圆角
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setMinimumSize(280, 150)
         self.resize(300, 220)
+	
 
     def _init_ui(self) -> None:
         # ---- 1. 最外层透明容器与带圆角的主视窗 ----
