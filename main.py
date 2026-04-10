@@ -26,7 +26,7 @@ from matplotlib.figure import Figure
 
 
 # 确保你的同级目录下有 plotbox.py
-from plotbox import render_box_and_scatter_chart
+from box_plot import render_box_and_scatter_chart
 
 try:
     import pythoncom as _pythoncom
