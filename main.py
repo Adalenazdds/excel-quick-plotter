@@ -5,7 +5,7 @@ from typing import Optional
 import pandas as pd
 import xlwings as xw
 from PyQt5.QtCore import QObject, QPoint, Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QMouseEvent
+from PyQt5.QtGui import QMouseEvent, QIcon
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
@@ -18,16 +18,16 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt5.QtGui import QIcon
 
 import matplotlib
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 
-
+# 确保你的同级目录下有这三个文件
 from box_plot import render_box_and_scatter_chart
 from scatter_plot import render_scatter_kde_chart
+from scatter_plot_multi import render_multi_scatter_kde_chart
 
 try:
     import pythoncom as _pythoncom
@@ -62,7 +62,6 @@ class ExcelFetchWorker(QObject):
             if values is None:
                 raise ValueError("empty selection")
 
-            # 选区可能是空白区域
             has_any_value = False
             try:
                 for row in values:
@@ -117,7 +116,7 @@ class FloatingToolWindow(QWidget):
         self._excel_worker = None  # type: Optional[ExcelFetchWorker]
         self._last_df = None
         self._chart_windows = []
-        self._chart_type = "box"  # box | scatter
+        self._chart_type = "box"  # box | scatter | multi
 
         self._init_window()
         self._init_ui()
@@ -125,16 +124,12 @@ class FloatingToolWindow(QWidget):
     def _init_window(self) -> None:
         self.setWindowTitle("EXCEL快速分析")
         self.setWindowIcon(QIcon('EXCEL-Quick-Plotter.ico'))
-        # 设置无边框、置顶
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        # 背景透明，为了能让内部的 QFrame 画出平滑的大圆角
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setMinimumSize(280, 150)
-        self.resize(300, 220)
-	
+        self.resize(320, 240)
 
     def _init_ui(self) -> None:
-        # ---- 1. 最外层透明容器与带圆角的主视窗 ----
         base_layout = QVBoxLayout(self)
         base_layout.setContentsMargins(10, 10, 10, 10)
 
@@ -149,7 +144,6 @@ class FloatingToolWindow(QWidget):
         """)
         base_layout.addWidget(self.main_frame)
 
-        # ---- 2. 主视窗内的核心布局 ----
         root = QVBoxLayout(self.main_frame)
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(12)
@@ -177,24 +171,35 @@ class FloatingToolWindow(QWidget):
         self._apply_pin_visual(True)
         self.pin_button.toggled.connect(self._set_always_on_top)
 
+        # 修复的图表选择按钮
         self.chart_button = QToolButton(self.top_bar)
         self.chart_button.setToolTip("选择图表类型")
-        self.chart_button.setFixedSize(44, 32)
+        # 宽度调大一点以便显示文字和下拉箭头
+        self.chart_button.setFixedSize(80, 32) 
         self.chart_button.setStyleSheet("""
             QToolButton {
-                background-color: transparent; border-radius: 16px; font-size: 12px;
+                background-color: #E2E8F0; border-radius: 16px; font-size: 12px; font-weight: bold; color: #2C3E50;
             }
-            QToolButton:hover { background-color: #E2E8F0; }
+            QToolButton:hover { background-color: #CBD5E1; }
+            QToolButton::menu-indicator { image: none; } /* 隐藏默认的难看的箭头 */
         """)
-        self._apply_chart_visual()
-
+        
+        # 使用 MenuButtonPopup，点击按钮触发主动作，点击边缘下拉
+        # 但为了用户体验一致，我们直接将整个按钮变成触发下拉菜单的入口
+        self.chart_button.setPopupMode(QToolButton.InstantPopup)
+        
         chart_menu = QMenu(self.chart_button)
         action_box = chart_menu.addAction("Box Plot")
-        action_scatter = chart_menu.addAction("Scatter Plot")
+        action_scatter = chart_menu.addAction("Scatter (双组)")
+        action_multi = chart_menu.addAction("Scatter (多组)")
+        
         action_box.triggered.connect(lambda: self._set_chart_type("box"))
         action_scatter.triggered.connect(lambda: self._set_chart_type("scatter"))
+        action_multi.triggered.connect(lambda: self._set_chart_type("multi"))
+        
         self.chart_button.setMenu(chart_menu)
-        self.chart_button.setPopupMode(QToolButton.InstantPopup)
+        self._apply_chart_visual()
+
         top_layout.addWidget(self.status_label)
         top_layout.addWidget(self.chart_button)
         top_layout.addWidget(self.pin_button)
@@ -222,22 +227,18 @@ class FloatingToolWindow(QWidget):
         self.info_hint.setStyleSheet("font-size:13px; color:#95A5A6;")
         info_layout.addWidget(self.info_hint)
 
-        # 1. 工作表（单药丸）
         self.sheet_prefix, self.sheet_pill, _ = self._create_pill_row(
             info_layout, "工作表：", "SheetPill", "#C3BEF0", "#312C57" 
         )
         
-        # 2. 范围（双药丸）
         self.range_prefix, self.range_pill1, self.range_sep, self.range_pill2 = self._create_double_pill_row(
             info_layout, "范    围：", "Range", "#A8E6CF", "#1A4D3A" 
         )
         
-        # 3. 单元格（双药丸）
         self.cells_prefix, self.cells_pill1, self.cells_sep, self.cells_pill2 = self._create_double_pill_row(
             info_layout, "单元格：", "Cells", "#FFD3B6", "#8A3C12" 
         )
 
-        # 路径展示
         self.path_label = QLabel(self.info_card)
         self.path_label.setWordWrap(True)
         self.path_label.setStyleSheet("font-size:11px; color:#BDC3C7; font-family:Consolas, \"Courier New\";")
@@ -267,7 +268,6 @@ class FloatingToolWindow(QWidget):
         root.addWidget(self.action_button)
 
     def _create_pill_row(self, parent_layout, label_text, object_name, bg_color, text_color):
-        """辅助函数：创建单药丸布局"""
         row_layout = QHBoxLayout()
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(6)
@@ -302,7 +302,6 @@ class FloatingToolWindow(QWidget):
         return prefix, pill, suffix
 
     def _create_double_pill_row(self, parent_layout, label_text, obj_name_prefix, bg_color, text_color):
-        """辅助函数：创建带有冒号分隔的双药丸布局"""
         row_layout = QHBoxLayout()
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(6)
@@ -349,10 +348,15 @@ class FloatingToolWindow(QWidget):
         self.pin_button.setText("📌" if pinned else "📍")
 
     def _apply_chart_visual(self) -> None:
-        self.chart_button.setText("Box" if self._chart_type == "box" else "Scatter")
+        text_map = {
+            "box": "Box ▾",
+            "scatter": "Scatter ▾",
+            "multi": "Multi ▾"
+        }
+        self.chart_button.setText(text_map.get(self._chart_type, "图表 ▾"))
 
     def _set_chart_type(self, chart_type: str) -> None:
-        if chart_type not in ("box", "scatter"):
+        if chart_type not in ("box", "scatter", "multi"):
             return
         self._chart_type = chart_type
         self._apply_chart_visual()
@@ -396,6 +400,7 @@ class FloatingToolWindow(QWidget):
         except Exception as exc:
             render_ok = False
             self.set_status("作图失败 ❌")
+            print(traceback.format_exc())
             
         if render_ok:
             self.set_status("就绪 🎈")
@@ -450,7 +455,6 @@ class FloatingToolWindow(QWidget):
         self.info_hint.setText("")
         self.info_hint.setVisible(False)
 
-        # 统一显示所有基础元素
         for widget in [self.sheet_prefix, self.sheet_pill, 
                        self.range_prefix, self.range_pill1, self.range_sep, self.range_pill2,
                        self.cells_prefix, self.cells_pill1, self.cells_sep, self.cells_pill2,
@@ -459,7 +463,6 @@ class FloatingToolWindow(QWidget):
 
         self.sheet_pill.setText(sheet_name)
 
-        # 解析并设置范围 (去掉 $ 符号，并通过 : 切割)
         addr_clean = address.replace("$", "")
         if ":" in addr_clean:
             start_cell, end_cell = addr_clean.split(":", 1)
@@ -543,15 +546,15 @@ class FloatingToolWindow(QWidget):
         layout.addWidget(toolbar)
         layout.addWidget(canvas, 1)
 
-        ax = fig.add_subplot(111)
-
         try:
             if self._chart_type == "box":
+                ax = fig.add_subplot(111)
                 render_box_and_scatter_chart(ax, df, sheet_name=meta.get("sheet_name", "Data"))
-            else:
+            elif self._chart_type == "scatter":
                 render_scatter_kde_chart(fig, df, sheet_name=meta.get("sheet_name", "Data"))
+            elif self._chart_type == "multi":
+                render_multi_scatter_kde_chart(fig, df, sheet_name=meta.get("sheet_name", "Data"))
         except Exception as exc:
-
             fig.clear()
             ax = fig.add_subplot(111)
             ax.text(0.5, 0.5, f"作图失败: {exc}", ha="center", va="center")
@@ -574,7 +577,6 @@ class FloatingToolWindow(QWidget):
 
 
 def main():
-    # 启用高 DPI 缩放支持，让在现代屏幕上文字和圆角更清晰
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     
