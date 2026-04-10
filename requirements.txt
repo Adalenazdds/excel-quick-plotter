@@ -3,4 +3,6 @@ matplotlib
 pandas
 numpy
 xlwings
+seaborn
+scipy
 pywin32; platform_system == "Windows"

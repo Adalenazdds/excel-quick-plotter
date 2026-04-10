@@ -7,6 +7,7 @@
 - **轻量级悬浮窗**：采用无边框设计，支持鼠标任意拖拽，并提供一键置顶/取消置顶功能，不干扰 Excel 正常办公。
 - **一键提取选区**：借助 `xlwings`，直接从当前激活的 Excel 窗口读取您鼠标框选的单元格数据区域，无需繁琐的“另存为”或“导入”文件操作。
 - **智能数据清洗**：自动剔除框选范围内的文本字符（如标题）和空值（NaN），只提取纯净的数字用于图形绘制。
+- **图表模式可切换**：悬浮窗支持在 **Box Plot**（默认）与 **Scatter Plot** 之间切换。
 - **综合自适应图表**：
   - 数据组并排对比，支持处理任意多列框选数据。
   - **散点图 (Scatter)**：带有轻微横向抖动，观察数据密集度。
@@ -20,7 +21,7 @@
 项目基于 **Python 3.7+** 开发，建议使用虚拟环境运行，所需核心库如下：
 
 ```bash
-pip install PyQt5 matplotlib pandas numpy xlwings scipy
+pip install PyQt5 matplotlib pandas numpy xlwings seaborn scipy
 ```
 
 > **注意：** 操作 Excel 数据时，依赖本机的 Office Excel (或通过 xlwings 驱动的其他兼容应用)，请勿以系统管理员权限分别启动 Excel 和 Python 脚本，以防跨权限导致 COM 接口拒绝访问。

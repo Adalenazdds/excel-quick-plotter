@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QToolButton,
@@ -25,8 +26,8 @@ from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as Navigatio
 from matplotlib.figure import Figure
 
 
-# 确保你的同级目录下有 plotbox.py
 from box_plot import render_box_and_scatter_chart
+from scatter_plot import render_scatter_kde_chart
 
 try:
     import pythoncom as _pythoncom
@@ -116,6 +117,7 @@ class FloatingToolWindow(QWidget):
         self._excel_worker = None  # type: Optional[ExcelFetchWorker]
         self._last_df = None
         self._chart_windows = []
+        self._chart_type = "box"  # box | scatter
 
         self._init_window()
         self._init_ui()
@@ -175,7 +177,26 @@ class FloatingToolWindow(QWidget):
         self._apply_pin_visual(True)
         self.pin_button.toggled.connect(self._set_always_on_top)
 
+        self.chart_button = QToolButton(self.top_bar)
+        self.chart_button.setToolTip("选择图表类型")
+        self.chart_button.setFixedSize(44, 32)
+        self.chart_button.setStyleSheet("""
+            QToolButton {
+                background-color: transparent; border-radius: 16px; font-size: 12px;
+            }
+            QToolButton:hover { background-color: #E2E8F0; }
+        """)
+        self._apply_chart_visual()
+
+        chart_menu = QMenu(self.chart_button)
+        action_box = chart_menu.addAction("Box Plot")
+        action_scatter = chart_menu.addAction("Scatter Plot")
+        action_box.triggered.connect(lambda: self._set_chart_type("box"))
+        action_scatter.triggered.connect(lambda: self._set_chart_type("scatter"))
+        self.chart_button.setMenu(chart_menu)
+        self.chart_button.setPopupMode(QToolButton.InstantPopup)
         top_layout.addWidget(self.status_label)
+        top_layout.addWidget(self.chart_button)
         top_layout.addWidget(self.pin_button)
         root.addWidget(self.top_bar)
 
@@ -327,6 +348,15 @@ class FloatingToolWindow(QWidget):
     def _apply_pin_visual(self, pinned: bool) -> None:
         self.pin_button.setText("📌" if pinned else "📍")
 
+    def _apply_chart_visual(self) -> None:
+        self.chart_button.setText("Box" if self._chart_type == "box" else "Scatter")
+
+    def _set_chart_type(self, chart_type: str) -> None:
+        if chart_type not in ("box", "scatter"):
+            return
+        self._chart_type = chart_type
+        self._apply_chart_visual()
+
     def _set_always_on_top(self, on: bool) -> None:
         self._apply_pin_visual(on)
         self.setWindowFlag(Qt.WindowStaysOnTopHint, on)
@@ -453,7 +483,7 @@ class FloatingToolWindow(QWidget):
     def _hit_interactive_widget(self, local_pos: QPoint) -> bool:
         widget = self.childAt(local_pos)
         while widget is not None:
-            if widget in (self.pin_button, self.action_button):
+            if widget in (self.pin_button, self.chart_button, self.action_button):
                 return True
             widget = widget.parentWidget()
         return False
@@ -516,15 +546,22 @@ class FloatingToolWindow(QWidget):
         ax = fig.add_subplot(111)
 
         try:
-            render_box_and_scatter_chart(ax, df, sheet_name=meta.get("sheet_name", "Data"))
+            if self._chart_type == "box":
+                render_box_and_scatter_chart(ax, df, sheet_name=meta.get("sheet_name", "Data"))
+            else:
+                render_scatter_kde_chart(fig, df, sheet_name=meta.get("sheet_name", "Data"))
         except Exception as exc:
-            ax.text(0.5, 0.5, f"作图失败: {exc}", ha="center", va="center")
-            print(f"[UI] plotbox render failed: {exc}")
 
-        try:
-            fig.tight_layout()
-        except Exception:
-            pass
+            fig.clear()
+            ax = fig.add_subplot(111)
+            ax.text(0.5, 0.5, f"作图失败: {exc}", ha="center", va="center")
+            print(f"[UI] render failed: {exc}")
+
+        if self._chart_type == "box":
+            try:
+                fig.tight_layout()
+            except Exception:
+                pass
 
         chart_win.show()
 
