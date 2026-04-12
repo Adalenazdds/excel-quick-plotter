@@ -1,3 +1,4 @@
+import os
 import sys
 import traceback
 from typing import Optional
@@ -33,6 +34,14 @@ try:
     import pythoncom as _pythoncom
 except Exception:
     _pythoncom = None
+
+
+def resource_path(relative_path: str) -> str:
+    if getattr(sys, "frozen", False):
+        base_path = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, relative_path)
 
 
 class ExcelFetchWorker(QObject):
@@ -123,7 +132,7 @@ class FloatingToolWindow(QWidget):
 
     def _init_window(self) -> None:
         self.setWindowTitle("EXCEL快速分析")
-        self.setWindowIcon(QIcon('EXCEL-Quick-Plotter.ico'))
+        self.setWindowIcon(QIcon(resource_path("icon.ico")))
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setMinimumSize(280, 150)
