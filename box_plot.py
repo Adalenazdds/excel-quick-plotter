@@ -3,16 +3,57 @@ import pandas as pd
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 
+
+def _is_blank_cell(value) -> bool:
+    if value is None:
+        return True
+    try:
+        if pd.isna(value):
+            return True
+    except Exception:
+        pass
+    if isinstance(value, str) and value.strip() == "":
+        return True
+    return False
+
+
+def _is_numeric_type_cell(value) -> bool:
+    # Strings like "1" / "1.2" are NOT numeric here (they should trigger header detection).
+    if isinstance(value, bool):
+        return False
+    return isinstance(value, (int, float, np.number))
+
+
+def _detect_header_row(df: pd.DataFrame) -> bool:
+    if df is None or df.shape[0] == 0 or df.shape[1] == 0:
+        return False
+
+    first_row = df.iloc[0, :].tolist()
+    for cell in first_row:
+        if _is_blank_cell(cell):
+            continue
+        # Any non-empty and non-numeric-type cell triggers header.
+        if not _is_numeric_type_cell(cell):
+            return True
+    return False
+
 def render_box_and_scatter_chart(
     ax: Axes, df: pd.DataFrame, sheet_name: str = "Data"
 ) -> None:
     # 1. 准备x轴的标签
-    x_labels = []
-    for col in df.columns:
-        if isinstance(col, int):
-            x_labels.append(f"Col {col}")
-        else:
-            x_labels.append(str(col))
+    has_header = _detect_header_row(df)
+    if has_header:
+        header_values = df.iloc[0, :].tolist()
+        x_labels = ["N/A" if _is_blank_cell(v) else str(v).strip() for v in header_values]
+        data_df = df.iloc[1:, :]
+    else:
+        x_labels = []
+        for col in df.columns:
+            if isinstance(col, int):
+                x_labels.append(f"Col {col}")
+            else:
+                x_labels.append(str(col))
+        data_df = df
 
     y_data_values = []
     all_data = []
@@ -20,7 +61,7 @@ def render_box_and_scatter_chart(
     # 2. 从DataFrame中提取每列数据，并计算全局范围
     for col in df.columns:
         # 使用 pd.to_numeric 过滤非数字内容，再去除NaN值
-        numeric_series = pd.to_numeric(df[col], errors="coerce")
+        numeric_series = pd.to_numeric(data_df[col], errors="coerce")
         column_data = numeric_series.dropna().tolist()
 
         y_data_values.append(column_data)
@@ -35,8 +76,8 @@ def render_box_and_scatter_chart(
     data_range = global_max - global_min
     data_padding = data_range if data_range > 0 else 1.0
 
-    # 将数据转换为适合绘制的字典格式
-    combined_data = {label: values for label, values in zip(x_labels, y_data_values)}
+    # Keep order and allow duplicate labels (dict would overwrite duplicates).
+    combined_data = list(zip(x_labels, y_data_values))
 
     # 准备x轴位置 - 箱线图居中，散点图在左，直方图在右
     x_positions = np.arange(len(x_labels)) + 1
@@ -45,7 +86,7 @@ def render_box_and_scatter_chart(
 
     # 3. 绘制散点图
     scatter_color = "gray"
-    for i, (label, values) in enumerate(combined_data.items()):
+    for i, (label, values) in enumerate(combined_data):
         if not values:
             continue
         # 增加水平抖动
@@ -62,7 +103,7 @@ def render_box_and_scatter_chart(
         )
 
     # 4. 绘制箱线图
-    valid_data_for_box = list(combined_data.values())
+    valid_data_for_box = [values for _, values in combined_data]
     if any(valid_data_for_box):
         # 仅传入非空数据，对应其正确的位置
         valid_positions = [x_positions[i] for i, v in enumerate(valid_data_for_box) if v]
@@ -102,7 +143,7 @@ def render_box_and_scatter_chart(
         global_bins = 50
         global_bin_width = 0.02
 
-    for i, (label, values) in enumerate(combined_data.items()):
+    for i, (label, values) in enumerate(combined_data):
         if not values:
             continue
         
@@ -128,7 +169,7 @@ def render_box_and_scatter_chart(
         )
 
     # 6. 计算和添加统计标签
-    for i, (label, values) in enumerate(combined_data.items()):
+    for i, (label, values) in enumerate(combined_data):
         if not values:
             continue
         min_val = np.min(values)
