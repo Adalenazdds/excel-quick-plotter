@@ -1,6 +1,7 @@
 import os
 import sys
 import traceback
+from io import StringIO
 from typing import Optional
 
 import pandas as pd
@@ -114,6 +115,69 @@ class ExcelFetchWorker(QObject):
                     pass
 
 
+def _parse_tabular_text_to_df(text: str) -> pd.DataFrame:
+    raw = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    raw = raw.strip("\n")
+    if not raw.strip():
+        raise ValueError("empty clipboard")
+
+    # Google Sheets / Excel / many web tables: tab-separated rows
+    if "\t" in raw:
+        sep = "\t"
+    else:
+        # Fallback: simple CSV
+        lines = [ln for ln in raw.split("\n") if ln.strip() != ""]
+        if len(lines) >= 2 and any("," in ln for ln in lines):
+            sep = ","
+        else:
+            raise ValueError("clipboard text is not a table")
+
+    df = pd.read_csv(
+        StringIO(raw),
+        sep=sep,
+        header=None,
+        dtype=object,
+        engine="python",
+        keep_default_na=True,
+    )
+
+    # Strip strings, treat empty/whitespace-only as missing.
+    df = df.apply(lambda col: col.map(lambda v: v.strip() if isinstance(v, str) else v))
+    df = df.replace(r"^\s*$", pd.NA, regex=True)
+
+    # Drop fully empty rows/cols.
+    df = df.dropna(axis=0, how="all").dropna(axis=1, how="all")
+
+    if df.shape[0] == 0 or df.shape[1] == 0:
+        raise ValueError("empty table")
+    return df
+
+
+class ClipboardFetchWorker(QObject):
+    finished = pyqtSignal(object, dict)  # pandas.DataFrame, metadata dict
+    failed = pyqtSignal(str)
+
+    def __init__(self, clipboard_text: str):
+        super().__init__()
+        self._clipboard_text = clipboard_text
+
+    def run(self):
+        try:
+            df = _parse_tabular_text_to_df(self._clipboard_text)
+            nrows, ncols = int(df.shape[0]), int(df.shape[1])
+            meta = {
+                "book_name": "Clipboard",
+                "sheet_name": "Clipboard",
+                "address": f"R1C1:R{nrows}C{ncols}",
+                "filepath": "clipboard://",
+                "nrows": nrows,
+                "ncols": ncols,
+            }
+            self.finished.emit(df, meta)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class FloatingToolWindow(QWidget):
 
     def __init__(self):
@@ -122,7 +186,8 @@ class FloatingToolWindow(QWidget):
         self._drag_active = False
         self._drag_offset = None  # type: Optional[QPoint]
         self._excel_thread = None  # type: Optional[QThread]
-        self._excel_worker = None  # type: Optional[ExcelFetchWorker]
+        self._excel_worker = None  # type: Optional[QObject]
+        self._fallback_clipboard_attempted = False
         self._last_df = None
         self._chart_windows = []
         self._chart_type = "box"  # box | scatter | multi
@@ -379,6 +444,7 @@ class FloatingToolWindow(QWidget):
         if self._excel_thread is not None and self._excel_thread.isRunning():
             return
 
+        self._fallback_clipboard_attempted = False
         self.set_status("🚀 读取中...")
         self.action_button.setEnabled(False)
         self.action_button.setText("读取中...")
@@ -421,6 +487,70 @@ class FloatingToolWindow(QWidget):
     def _on_excel_fetch_failed(self, _message: str) -> None:
         try:
             print("[UI] Excel fetch failed:", _message)
+        except Exception:
+            pass
+
+        # Auto fallback: try parsing clipboard tabular data (e.g. Google Sheets Ctrl+C selection)
+        if not self._fallback_clipboard_attempted:
+            self._fallback_clipboard_attempted = True
+            self._excel_thread = None
+            self._excel_worker = None
+            self._start_clipboard_fetch()
+            return
+
+        self.set_status("未检测到数据 ❌")
+        self.action_button.setEnabled(True)
+        self.action_button.setText("✨ 提取并作图")
+        self._excel_thread = None
+        self._excel_worker = None
+
+    def _start_clipboard_fetch(self) -> None:
+        try:
+            clipboard = QApplication.clipboard()
+            clipboard_text = clipboard.text() if clipboard is not None else ""
+        except Exception:
+            clipboard_text = ""
+
+        self.set_status("Excel 未检测到数据，尝试读取剪贴板...")
+
+        thread = QThread(self)
+        worker = ClipboardFetchWorker(clipboard_text)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_clipboard_fetch_success)
+        worker.failed.connect(self._on_clipboard_fetch_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        self._excel_thread = thread
+        self._excel_worker = worker
+        thread.start()
+
+    def _on_clipboard_fetch_success(self, df, meta) -> None:
+        self._last_df = df
+        self._set_info_from_meta(meta)
+
+        render_ok = True
+        try:
+            self._show_chart_window(df, meta)
+        except Exception:
+            render_ok = False
+            self.set_status("作图失败 ❌")
+            print(traceback.format_exc())
+
+        if render_ok:
+            self.set_status("就绪 🎈")
+        self.action_button.setEnabled(True)
+        self.action_button.setText("✨ 提取并作图")
+        self._excel_thread = None
+        self._excel_worker = None
+
+    def _on_clipboard_fetch_failed(self, _message: str) -> None:
+        try:
+            print("[UI] Clipboard fetch failed:", _message)
         except Exception:
             pass
         self.set_status("未检测到数据 ❌")
