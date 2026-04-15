@@ -1,6 +1,7 @@
 import os
 import sys
 import traceback
+import copy
 from io import StringIO
 from typing import Optional
 
@@ -22,8 +23,11 @@ from PyQt5.QtWidgets import (
 )
 
 import matplotlib
+import numpy as np
+import matplotlib.cm as cm
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
+from matplotlib.colors import Normalize
 from matplotlib.figure import Figure
 
 # 确保你的同级目录下有这三个文件
@@ -153,6 +157,104 @@ def _parse_tabular_text_to_df(text: str) -> pd.DataFrame:
     return df
 
 
+def _coerce_numeric_matrix(df: pd.DataFrame) -> pd.DataFrame:
+    cleaned = df.copy()
+
+    cleaned = cleaned.apply(
+        lambda col: col.map(lambda v: v.strip() if isinstance(v, str) else v)
+    )
+    cleaned = cleaned.replace(r"^\s*$", pd.NA, regex=True)
+
+    numeric_df = cleaned.apply(lambda col: pd.to_numeric(col, errors="coerce"))
+    numeric_df = numeric_df.dropna(axis=0, how="all").dropna(axis=1, how="all")
+
+    if numeric_df.shape[0] == 0 or numeric_df.shape[1] == 0:
+        raise ValueError("未找到有效数值矩阵")
+    if not np.isfinite(numeric_df.to_numpy(dtype=float)).any():
+        raise ValueError("未找到有效数值矩阵")
+
+    return numeric_df
+
+
+def render_heatmap_chart(fig: Figure, df: pd.DataFrame, sheet_name: str = "Data") -> None:
+    """Render a Matplotlib heatmap from a rectangular Excel selection.
+
+    Requirements:
+    - Each cell is 1:1 (square) via equal aspect.
+    - No internal white gridlines between cells.
+    """
+
+    fig.clear()
+
+    numeric_df = _coerce_numeric_matrix(df)
+    data = numeric_df.to_numpy(dtype=float)
+
+    rows, cols = int(data.shape[0]), int(data.shape[1])
+    finite_mask = np.isfinite(data)
+
+    vmin = float(np.nanmin(data))
+    vmax = float(np.nanmax(data))
+    if not np.isfinite(vmin) or not np.isfinite(vmax):
+        raise ValueError("未找到有效数值矩阵")
+
+    ax = fig.add_subplot(111)
+
+    fig.subplots_adjust(left=0.06, right=0.88, top=0.90, bottom=0.06)
+    fig.suptitle(f"Heatmap - {sheet_name}", fontsize=14, fontweight="bold", y=0.97)
+
+    cmap_base = cm.get_cmap("Blues")
+    cmap = copy.copy(cmap_base)
+    try:
+        cmap.set_bad(color="#E5E7EB")
+    except Exception:
+        pass
+
+    masked = np.ma.masked_invalid(data)
+    im = ax.imshow(
+        masked,
+        cmap=cmap,
+        interpolation="none",
+        aspect="equal",
+        vmin=vmin,
+        vmax=vmax,
+        resample=False,
+    )
+
+    # Pixel-aligned edges (half-pixel boundaries) for cleaner rendering.
+    ax.set_xlim(-0.5, cols - 0.5)
+    ax.set_ylim(rows - 0.5, -0.5)
+
+    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.02)
+    cbar.ax.tick_params(labelsize=9)
+
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    annotate_threshold = 400
+    if rows * cols <= annotate_threshold:
+        norm = Normalize(vmin=vmin, vmax=vmax)
+        for r in range(rows):
+            for c in range(cols):
+                if not finite_mask[r, c]:
+                    continue
+                val = float(data[r, c])
+                intensity = float(norm(val)) if vmax != vmin else 0.0
+                text_color = "white" if intensity >= 0.60 else "black"
+                ax.text(
+                    c,
+                    r,
+                    f"{val:.3g}",
+                    ha="center",
+                    va="center",
+                    fontsize=8,
+                    color=text_color,
+                )
+
+    for spine in ax.spines.values():
+        spine.set_color("black")
+        spine.set_linewidth(1)
+
+
 class ClipboardFetchWorker(QObject):
     finished = pyqtSignal(object, dict)  # pandas.DataFrame, metadata dict
     failed = pyqtSignal(str)
@@ -190,7 +292,7 @@ class FloatingToolWindow(QWidget):
         self._fallback_clipboard_attempted = False
         self._last_df = None
         self._chart_windows = []
-        self._chart_type = "box"  # box | scatter | multi
+        self._chart_type = "box"  # box | scatter | multi | heatmap
 
         self._init_window()
         self._init_ui()
@@ -266,10 +368,12 @@ class FloatingToolWindow(QWidget):
         action_box = chart_menu.addAction("Box Plot")
         action_scatter = chart_menu.addAction("Scatter (双组)")
         action_multi = chart_menu.addAction("Scatter (多组)")
+        action_heatmap = chart_menu.addAction("Heatmap")
         
         action_box.triggered.connect(lambda: self._set_chart_type("box"))
         action_scatter.triggered.connect(lambda: self._set_chart_type("scatter"))
         action_multi.triggered.connect(lambda: self._set_chart_type("multi"))
+        action_heatmap.triggered.connect(lambda: self._set_chart_type("heatmap"))
         
         self.chart_button.setMenu(chart_menu)
         self._apply_chart_visual()
@@ -425,12 +529,13 @@ class FloatingToolWindow(QWidget):
         text_map = {
             "box": "Box ▾",
             "scatter": "Scatter ▾",
-            "multi": "Multi ▾"
+            "multi": "Multi ▾",
+            "heatmap": "Heatmap ▾",
         }
         self.chart_button.setText(text_map.get(self._chart_type, "图表 ▾"))
 
     def _set_chart_type(self, chart_type: str) -> None:
-        if chart_type not in ("box", "scatter", "multi"):
+        if chart_type not in ("box", "scatter", "multi", "heatmap"):
             return
         self._chart_type = chart_type
         self._apply_chart_visual()
@@ -671,14 +776,34 @@ class FloatingToolWindow(QWidget):
 
         num_cols = df.shape[1]
         fig_width = max(8, num_cols * 1.5)
+        fig_height = 6
+        win_width = int(fig_width * 100)
+        win_height = 600
+
+        if self._chart_type == "heatmap":
+            # Heatmap needs equal-aspect cells; pick a figure/window size that matches rows/cols
+            # to avoid excessive letterboxing.
+            try:
+                numeric_df = _coerce_numeric_matrix(df)
+                rows, cols = int(numeric_df.shape[0]), int(numeric_df.shape[1])
+            except Exception:
+                rows, cols = int(getattr(df, "shape", (1, 1))[0]), int(getattr(df, "shape", (1, 1))[1])
+                rows = max(rows, 1)
+                cols = max(cols, 1)
+
+            cell_in = 0.42
+            fig_height = min(max(rows * cell_in + 1.0, 5.0), 14.0)
+            fig_width = min(max(cols * cell_in + 1.8, 6.0), 18.0)
+            win_width = int(fig_width * 100)
+            win_height = int(fig_height * 100) + 80  # toolbar/title overhead
 
         chart_win = QWidget()
         chart_win.setAttribute(Qt.WA_DeleteOnClose)
         chart_win.setWindowTitle(f"分析图表 - {meta.get('book_name', '')} | 范围: {meta.get('address', '')}")
-        chart_win.resize(int(fig_width * 100), 600)
+        chart_win.resize(win_width, win_height)
         
         layout = QVBoxLayout(chart_win)
-        fig = Figure(figsize=(fig_width, 6), dpi=100)
+        fig = Figure(figsize=(fig_width, fig_height), dpi=100)
         canvas = FigureCanvas(fig)
 
         toolbar = NavigationToolbar(canvas, chart_win)
@@ -693,6 +818,8 @@ class FloatingToolWindow(QWidget):
                 render_scatter_kde_chart(fig, df, sheet_name=meta.get("sheet_name", "Data"))
             elif self._chart_type == "multi":
                 render_multi_scatter_kde_chart(fig, df, sheet_name=meta.get("sheet_name", "Data"))
+            elif self._chart_type == "heatmap":
+                render_heatmap_chart(fig, df, sheet_name=meta.get("sheet_name", "Data"))
         except Exception as exc:
             fig.clear()
             ax = fig.add_subplot(111)
