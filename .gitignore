@@ -11,7 +11,14 @@ ENV/
 
 # Packaging / build
 build/
-# dist/
+
+build_onefile/
+dist_onefile/
+build_onefile_work/
+*.exe
+*.pkg
+dist/
+dist_onefile/
 *.egg-info/
 .eggs/
 
