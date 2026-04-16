@@ -7,6 +7,7 @@ import pandas as pd
 import seaborn as sns
 from matplotlib.colors import Normalize
 from matplotlib.figure import Figure
+from matplotlib.patches import Patch
 import matplotlib.cm as cm
 
 
@@ -99,20 +100,27 @@ def render_multi_scatter_kde_chart(fig: Figure, df: pd.DataFrame, sheet_name: st
     fig.subplots_adjust(left=0.08, right=0.85, top=0.90, bottom=0.10)
     fig.suptitle(f"Scatter Density (Multi-Group) - {sheet_name}", fontsize=14, fontweight='bold', y=0.96)
 
+    # -----------------------------------------------------------
+    # 优化网格比例：缩窄边缘直方图比例，增加图例专属网格
+    # -----------------------------------------------------------
     gs = fig.add_gridspec(
         4, 4,
-        width_ratios=[1, 1, 1, 0.4],
-        height_ratios=[0.4, 1, 1, 1],
-        wspace=0.08, 
-        hspace=0.08,
+        width_ratios=[1, 1, 1, 0.3],  # 缩窄右侧直方图宽度
+        height_ratios=[0.3, 1, 1, 1], # 缩窄顶部直方图高度
+        wspace=0.05,  # 缩小水平间距
+        hspace=0.05,  # 缩小垂直间距
     )
 
     ax_top = fig.add_subplot(gs[0, 0:3])
     ax_main = fig.add_subplot(gs[1:4, 0:3])
     ax_right = fig.add_subplot(gs[1:4, 3], sharey=ax_main)
+    
+    # 专属图例区域 (右上角)
+    ax_legend = fig.add_subplot(gs[0, 3])
+    ax_legend.axis("off")
 
     # -----------------------------------------------------------
-    # 动态计算云图透明度：组数越多，整体透明度越高（Alpha 越小），防止互相遮盖
+    # 动态计算云图透明度：组数越多，透明度越高
     # -----------------------------------------------------------
     dynamic_alpha = max(0.85 - n_groups * 0.15, 0.25)
 
@@ -135,7 +143,7 @@ def render_multi_scatter_kde_chart(fig: Figure, df: pd.DataFrame, sheet_name: st
 
     binwidth = max(data_range / 30.0, 1e-6)
 
-    # 2. 绘制顶部边缘直方图
+    # 2. 绘制顶部边缘直方图 (极简风格)
     for g in groups:
         sns.histplot(
             x=g.x,
@@ -144,23 +152,34 @@ def render_multi_scatter_kde_chart(fig: Figure, df: pd.DataFrame, sheet_name: st
             edgecolor=g.hist_edgecolor,
             binwidth=binwidth,
             stat="probability",
-            alpha=0.6,  # 直方图保持适中的透明度即可
-            label=g.name,
+            alpha=0.6,
         )
         
     ax_top.set_xlim(ax_main.get_xlim())
-    ax_top.tick_params(labelbottom=False)
+    ax_top.tick_params(labelbottom=False, labelleft=False) 
     ax_top.set_xlabel("")
-    ax_top.set_ylabel("Freq", fontsize=10)
-    
-    if len(groups) > 1:
-        ax_top.legend(loc="upper right", frameon=False)
-        
+    ax_top.set_ylabel("") 
     ax_top.spines["top"].set_visible(False)
     ax_top.spines["right"].set_visible(False)
     ax_top.spines["bottom"].set_visible(False) 
+    ax_top.spines["left"].set_visible(False)
 
-    # 3. 绘制右侧边缘直方图
+    # 绘制独立图例
+    if len(groups) > 1:
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor=g.hist_color, edgecolor=g.hist_edgecolor, label=g.name)
+            for g in groups
+        ]
+        ax_legend.legend(
+            handles=legend_elements, 
+            loc="center", 
+            frameon=True, 
+            fontsize=10,
+            edgecolor="lightgrey"
+        )
+
+    # 3. 绘制右侧边缘直方图 (极简风格)
     for g in groups:
         sns.histplot(
             y=g.y,
@@ -172,31 +191,32 @@ def render_multi_scatter_kde_chart(fig: Figure, df: pd.DataFrame, sheet_name: st
             alpha=0.6,
         )
         
-    ax_right.tick_params(labelleft=False)
+    ax_right.tick_params(labelleft=False, labelbottom=False)
     ax_right.set_ylabel("")
-    ax_right.set_xlabel("Freq", fontsize=10)
+    ax_right.set_xlabel("")
     ax_right.spines["top"].set_visible(False)
     ax_right.spines["right"].set_visible(False)
     ax_right.spines["left"].set_visible(False)
+    ax_right.spines["bottom"].set_visible(False)
 
     # ==========================
-    # 4. Colorbar 动态堆叠布局
+    # 4. Colorbar 动态堆叠布局 (防重叠)
     # ==========================
     fig.canvas.draw()
     pos_main = ax_main.get_position()
     pos_right = ax_right.get_position()
 
-    cb_width = 0.012
-    cb_x = pos_right.x1 + 0.02
+    cb_width = 0.015
+    cb_x = pos_right.x1 + 0.03
     
     n = n_groups
-    gap = 0.02
+    gap = 0.08  # 增大的安全间距
     
-    # 如果只有1组，高度0.6；多组则平分高度，最高不超过0.4
+    # 动态计算高度，上限为0.35
     if n == 1:
         cb_h = pos_main.height * 0.60
     else:
-        cb_h = min((pos_main.height - (n - 1) * gap) / n, 0.4)
+        cb_h = min((pos_main.height - (n - 1) * gap) / n, 0.35)
     
     current_y = pos_main.y0 + pos_main.height - cb_h
     if n == 1:
@@ -206,5 +226,9 @@ def render_multi_scatter_kde_chart(fig: Figure, df: pd.DataFrame, sheet_name: st
         cax = fig.add_axes([cb_x, current_y, cb_width, cb_h])
         sm = cm.ScalarMappable(cmap=g.cmap, norm=Normalize(vmin=0, vmax=1.0))
         sm.set_array([])
-        fig.colorbar(sm, cax=cax)
+        
+        # 强制指定关键刻度，缩小字体
+        cb = fig.colorbar(sm, cax=cax, ticks=[0.0, 0.5, 1.0]) 
+        cb.ax.tick_params(labelsize=9)
+        
         current_y -= (cb_h + gap)

@@ -38,7 +38,10 @@ def _detect_header_row(df: pd.DataFrame) -> bool:
     return False
 
 def render_box_and_scatter_chart(
-    ax: Axes, df: pd.DataFrame, sheet_name: str = "Data"
+    ax: Axes,
+    df: pd.DataFrame,
+    sheet_name: str = "Data",
+    highlight_outliers: bool = True,
 ) -> None:
     # 1. 准备x轴的标签
     has_header = _detect_header_row(df)
@@ -86,15 +89,30 @@ def render_box_and_scatter_chart(
 
     # 3. 绘制散点图
     scatter_color = "gray"
+    outlier_color = "#EE884C"
     for i, (label, values) in enumerate(combined_data):
         if not values:
             continue
+
+        values_arr = np.asarray(values, dtype=float)
+
+        # 默认所有点为灰色；可选用 IQR(1.5*IQR) 高亮离群点
+        if highlight_outliers and len(values_arr) >= 4:
+            q1, q3 = np.percentile(values_arr, [25, 75])
+            iqr = q3 - q1
+            lower_bound = q1 - 1.5 * iqr
+            upper_bound = q3 + 1.5 * iqr
+            is_outlier = (values_arr < lower_bound) | (values_arr > upper_bound)
+            colors = np.where(is_outlier, outlier_color, scatter_color).tolist()
+        else:
+            colors = [scatter_color] * len(values_arr)
+
         # 增加水平抖动
-        x_jittered = np.random.normal(x_positions_scatter[i], 0.02, size=len(values))
+        x_jittered = np.random.normal(x_positions_scatter[i], 0.02, size=len(values_arr))
         ax.scatter(
             x_jittered,
-            values,
-            color=scatter_color,
+            values_arr,
+            c=colors,  # [修改] 使用 c 传入动态颜色数组
             alpha=0.6,
             s=40,
             edgecolors="white",
@@ -225,10 +243,36 @@ def render_box_and_scatter_chart(
         ),
         Line2D([0], [0], color="royalblue", lw=4, label="Boxplot"),
         Line2D([0], [0], color="lightgrey", lw=4, label="Histogram"),
+        Line2D([0], [0], color="red", lw=2, label="Median"),
+        Line2D([0], [0], color="green", lw=1.5, linestyle="--", label="Mean"),
     ]
-    ax.legend(handles=legend_elements, loc='lower right')
+
+    # [新增] Outliers 图例
+    if highlight_outliers:
+        legend_elements.append(
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                color="w",
+                label="Outliers",
+                markerfacecolor=outlier_color,
+                markersize=10,
+            )
+        )
+    
+    # 修改点：将 loc 设置为 'center left'，并使用 bbox_to_anchor 将其推到图表右侧外部
+    ax.legend(
+        handles=legend_elements, 
+        loc='center left', 
+        bbox_to_anchor=(1.02, 0.5), # (x, y) 坐标：1.02 表示在x轴外部一点，0.5 表示y轴居中
+        borderaxespad=0.
+    )
 
     # 设置图表边框
     for spine in ax.spines.values():
         spine.set_color("black")
         spine.set_linewidth(1)
+        
+    # 关键追加：因为图例被移到了画布外部，需要让图表自动调整布局以防图例被窗口边缘裁切
+    ax.figure.tight_layout()

@@ -11,6 +11,7 @@ from PyQt5.QtCore import QObject, QPoint, Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QMouseEvent, QIcon
 from PyQt5.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -34,6 +35,7 @@ from matplotlib.figure import Figure
 from box_plot import render_box_and_scatter_chart
 from scatter_plot import render_scatter_kde_chart
 from scatter_plot_multi import render_multi_scatter_kde_chart
+from line_plot import render_line_chart
 
 try:
     import pythoncom as _pythoncom
@@ -328,6 +330,7 @@ class FloatingToolWindow(QWidget):
         self.top_bar = QWidget(self.main_frame)
         top_layout = QHBoxLayout(self.top_bar)
         top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(6)
         
         self.status_label = QLabel("就绪 🎈", self.top_bar)
         self.status_label.setStyleSheet("font-size:16px; font-weight:900; color:#2C3E50;")
@@ -351,7 +354,7 @@ class FloatingToolWindow(QWidget):
         self.chart_button = QToolButton(self.top_bar)
         self.chart_button.setToolTip("选择图表类型")
         # 宽度调大一点以便显示文字和下拉箭头
-        self.chart_button.setFixedSize(80, 32) 
+        self.chart_button.setFixedSize(70, 32) 
         self.chart_button.setStyleSheet("""
             QToolButton {
                 background-color: #E2E8F0; border-radius: 16px; font-size: 12px; font-weight: bold; color: #2C3E50;
@@ -369,17 +372,49 @@ class FloatingToolWindow(QWidget):
         action_scatter = chart_menu.addAction("Scatter (双组)")
         action_multi = chart_menu.addAction("Scatter (多组)")
         action_heatmap = chart_menu.addAction("Heatmap")
+        action_line = chart_menu.addAction("Line Plot (多行)")
         
         action_box.triggered.connect(lambda: self._set_chart_type("box"))
         action_scatter.triggered.connect(lambda: self._set_chart_type("scatter"))
         action_multi.triggered.connect(lambda: self._set_chart_type("multi"))
         action_heatmap.triggered.connect(lambda: self._set_chart_type("heatmap"))
+        action_line.triggered.connect(lambda: self._set_chart_type("line"))
         
         self.chart_button.setMenu(chart_menu)
         self._apply_chart_visual()
 
+        # [新增] 高亮离群点开关（仅 Box Plot 显示）
+        self.highlight_outliers_toggle = QCheckBox("离群点", self.top_bar)
+        self.highlight_outliers_toggle.setChecked(True)
+        self.highlight_outliers_toggle.setCursor(Qt.PointingHandCursor)
+        # 让指示器在右侧，更像现代 Toggle Switch
+        self.highlight_outliers_toggle.setLayoutDirection(Qt.RightToLeft)
+        self.highlight_outliers_toggle.setStyleSheet("""
+            QCheckBox {
+                font-size: 12px;
+                spacing: 4px;
+            }
+            QCheckBox::indicator {
+                width: 32px;
+                height: 16px;
+                border-radius: 8px;
+                background-color: #D1D8E0;
+                image: none;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #EE884C;
+                image: none;
+            }
+            QCheckBox::indicator:unchecked {
+                background-color: #D1D8E0;
+                image: none;
+            }
+        """)
+        self.highlight_outliers_toggle.setVisible(self._chart_type == "box")
+
         top_layout.addWidget(self.status_label)
         top_layout.addWidget(self.chart_button)
+        top_layout.addWidget(self.highlight_outliers_toggle)
         top_layout.addWidget(self.pin_button)
         root.addWidget(self.top_bar)
 
@@ -531,14 +566,21 @@ class FloatingToolWindow(QWidget):
             "scatter": "Scatter ▾",
             "multi": "Multi ▾",
             "heatmap": "Heatmap ▾",
+            "line": "Line ▾",
         }
         self.chart_button.setText(text_map.get(self._chart_type, "图表 ▾"))
 
     def _set_chart_type(self, chart_type: str) -> None:
-        if chart_type not in ("box", "scatter", "multi", "heatmap"):
+        if chart_type not in ("box", "scatter", "multi", "heatmap", "line"):
             return
         self._chart_type = chart_type
         self._apply_chart_visual()
+
+        # [新增] 仅当选择 Box Plot 时显示开关
+        try:
+            self.highlight_outliers_toggle.setVisible(self._chart_type == "box")
+        except Exception:
+            pass
 
     def _set_always_on_top(self, on: bool) -> None:
         self._apply_pin_visual(on)
@@ -730,7 +772,7 @@ class FloatingToolWindow(QWidget):
     def _hit_interactive_widget(self, local_pos: QPoint) -> bool:
         widget = self.childAt(local_pos)
         while widget is not None:
-            if widget in (self.pin_button, self.chart_button, self.action_button):
+            if widget in (self.pin_button, self.chart_button, self.action_button, getattr(self, "highlight_outliers_toggle", None)):
                 return True
             widget = widget.parentWidget()
         return False
@@ -813,11 +855,18 @@ class FloatingToolWindow(QWidget):
         try:
             if self._chart_type == "box":
                 ax = fig.add_subplot(111)
-                render_box_and_scatter_chart(ax, df, sheet_name=meta.get("sheet_name", "Data"))
+                render_box_and_scatter_chart(
+                    ax,
+                    df,
+                    sheet_name=meta.get("sheet_name", "Data"),
+                    highlight_outliers=bool(self.highlight_outliers_toggle.isChecked()),
+                )
             elif self._chart_type == "scatter":
                 render_scatter_kde_chart(fig, df, sheet_name=meta.get("sheet_name", "Data"))
             elif self._chart_type == "multi":
                 render_multi_scatter_kde_chart(fig, df, sheet_name=meta.get("sheet_name", "Data"))
+            elif self._chart_type == "line":
+                render_line_chart(fig, df, sheet_name=meta.get("sheet_name", "Data"))
             elif self._chart_type == "heatmap":
                 render_heatmap_chart(fig, df, sheet_name=meta.get("sheet_name", "Data"))
         except Exception as exc:
