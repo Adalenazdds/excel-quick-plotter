@@ -1,21 +1,24 @@
 import os
 import sys
 import traceback
+import io
 from io import StringIO
 from typing import Optional
 
 import pandas as pd
 import xlwings as xw
 from PyQt5.QtCore import QObject, QPoint, Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QCursor, QMouseEvent, QIcon
+from PyQt5.QtGui import QCursor, QMouseEvent, QIcon, QImage
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMenu,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QToolTip,
     QToolButton,
@@ -192,6 +195,88 @@ class ClipboardFetchWorker(QObject):
             self.failed.emit(str(exc))
 
 
+class ChartDashboardWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("数据分析画板 - 多图集")
+        self.resize(1150, 700)
+        self.setAttribute(Qt.WA_DeleteOnClose, False)
+
+        # 1. 创建主垂直布局，消除边距
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # 2. 引入 QScrollArea（核心修改，当图表多时提供滚动条）
+        self.scroll_area = QScrollArea(self)
+        self.scroll_area.setWidgetResizable(True)  # 允许内部网格自动填充宽度
+        self.scroll_area.setFrameShape(QFrame.NoFrame)
+        self.scroll_area.setStyleSheet("QScrollArea { background-color: #F4F6F8; }")
+
+        # 3. 创建真正装载网格图表的容器 widget
+        self.grid_container = QWidget()
+        self.grid_container.setStyleSheet("QWidget { background-color: #F4F6F8; }")
+        self.grid_layout = QGridLayout(self.grid_container)
+        self.grid_layout.setSpacing(15)
+        self.grid_layout.setContentsMargins(15, 15, 15, 15)
+
+        # 4. 将容器放入滚动区域
+        self.scroll_area.setWidget(self.grid_container)
+        main_layout.addWidget(self.scroll_area)
+
+        self.chart_count = 0
+        self.max_columns = 3  # 一行最多显示 3 张图
+
+    def add_chart(self, canvas, toolbar, meta, chart_type):
+        """将生成的图表添加到网格中"""
+        container = QFrame()
+        # 加个卡片背景，让多图看起来更清爽
+        container.setStyleSheet(
+            """
+            QFrame {
+                background-color: white;
+                border-radius: 8px;
+                border: 1px solid #D1D8E0;
+            }
+        """
+        )
+        # 【关键修改】为单张图表卡片设置最小尺寸，防止被无限压缩导致图表内部文字重叠！
+        container.setMinimumSize(420, 360)
+
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(10, 10, 10, 10)
+
+        title_text = f"[{chart_type.upper()}] {meta.get('sheet_name', '')} | {meta.get('address', '')}"
+        title_label = QLabel(title_text)
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setStyleSheet(
+            "font-weight: bold; font-size: 13px; color: #2C3E50; border: none;"
+        )
+
+        vbox.addWidget(title_label)
+        vbox.addWidget(toolbar)
+        vbox.addWidget(canvas, 1)
+
+        row = self.chart_count // self.max_columns
+        col = self.chart_count % self.max_columns
+
+        self.grid_layout.addWidget(container, row, col)
+        self.chart_count += 1
+
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def closeEvent(self, event):
+        """关闭时清空画板并隐藏，以便下次提取时是全新干净的画板"""
+        for i in reversed(range(self.grid_layout.count())):
+            widget_to_remove = self.grid_layout.itemAt(i).widget()
+            self.grid_layout.removeWidget(widget_to_remove)
+            widget_to_remove.setParent(None)
+        self.chart_count = 0
+        self.hide()
+        event.ignore()
+
+
 class _HotkeyBridge(QObject):
     triggered = pyqtSignal()
 
@@ -288,6 +373,9 @@ class FloatingToolWindow(QWidget):
         self._chart_windows = []
         self._chart_type = "box"  # box | scatter | multi | heatmap
         self._pending_hotkey_trigger = False
+
+        # 【新增】初始化全局单一的画板窗口
+        self.dashboard_window = ChartDashboardWindow()
 
         self._init_window()
         self._init_ui()
@@ -822,80 +910,56 @@ class FloatingToolWindow(QWidget):
         super().closeEvent(event)
 
     def _show_chart_window(self, df, meta) -> None:
-        matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "SimSun", "Arial Unicode MS"]
+        matplotlib.rcParams["font.sans-serif"] = [
+            "Microsoft YaHei",
+            "SimHei",
+            "SimSun",
+            "Arial Unicode MS",
+        ]
         matplotlib.rcParams["axes.unicode_minus"] = False
 
-        num_cols = df.shape[1]
-        fig_width = max(8, num_cols * 1.5)
-        fig_height = 6
-        win_width = int(fig_width * 100)
-        win_height = 600
-
-        if self._chart_type == "heatmap":
-            # Heatmap needs equal-aspect cells; pick a figure/window size that matches rows/cols
-            # to avoid excessive letterboxing.
-            try:
-                numeric_df = coerce_numeric_matrix(df)
-                rows, cols = int(numeric_df.shape[0]), int(numeric_df.shape[1])
-            except Exception:
-                rows, cols = int(getattr(df, "shape", (1, 1))[0]), int(getattr(df, "shape", (1, 1))[1])
-                rows = max(rows, 1)
-                cols = max(cols, 1)
-
-            cell_in = 0.42
-            fig_height = min(max(rows * cell_in + 1.0, 5.0), 14.0)
-            fig_width = min(max(cols * cell_in + 1.8, 6.0), 18.0)
-            win_width = int(fig_width * 100)
-            win_height = int(fig_height * 100) + 80  # toolbar/title overhead
-
-        chart_win = QWidget()
-        chart_win.setAttribute(Qt.WA_DeleteOnClose)
-        chart_win.setWindowTitle(f"分析图表 - {meta.get('book_name', '')} | 范围: {meta.get('address', '')}")
-        chart_win.resize(win_width, win_height)
-
-        if self._pending_hotkey_trigger:
-            try:
-                chart_win.setWindowFlag(Qt.WindowStaysOnTopHint, True)
-            except Exception:
-                pass
-        
-        layout = QVBoxLayout(chart_win)
-        fig = Figure(figsize=(fig_width, fig_height), dpi=100)
+        # 创建基础的 Figure 和 Canvas
+        fig = Figure(figsize=(5, 4), dpi=100)  # 尺寸调小，以适应网格化展示
         canvas = FigureCanvas(fig)
 
-        toolbar = NavigationToolbar(canvas, chart_win)
+        # 实例化 Toolbar，parent 设为 None，稍后由画板容器接管
+        toolbar = NavigationToolbar(canvas, None)
+
+        # 追加“复制图片”按钮（复制当前图表到剪贴板）
         toolbar.addSeparator()
 
         def _copy_plot_to_clipboard() -> None:
             try:
-                # Ensure the latest render is captured.
-                try:
-                    canvas.draw()
-                except Exception:
-                    pass
+                # 【核心逻辑变更】抛弃由于截取 UI 导致的分辨率过低和变形
+                # 直接调用 Matplotlib 渲染出高清无损、排版原生的图像到内存
+                buf = io.BytesIO()
+                # bbox_inches="tight" 能自动裁剪白边，dpi=250 保证 PPT 里看极致清晰
+                fig.savefig(buf, format="png", dpi=250, bbox_inches="tight", facecolor="white")
+                buf.seek(0)
 
-                pixmap = canvas.grab()
+                # 将内存中的 PNG 二进制流转换为 QImage 塞进剪贴板
+                image = QImage.fromData(buf.getvalue())
                 clipboard = QApplication.clipboard()
                 if clipboard is not None:
-                    clipboard.setPixmap(pixmap)
+                    clipboard.setImage(image)
 
-                # Lightweight toast-like feedback.
                 try:
-                    QToolTip.showText(QCursor.pos(), "已复制!", toolbar)
+                    QToolTip.showText(
+                        QCursor.pos(),
+                        "已复制高清原图 (推荐粘贴至PPT)!",
+                        toolbar,
+                    )
                 except Exception:
                     pass
-            except Exception:
-                # Clipboard may be unavailable in some environments.
+            except Exception as e:
                 try:
-                    QToolTip.showText(QCursor.pos(), "复制失败", toolbar)
+                    QToolTip.showText(QCursor.pos(), f"复制失败: {e}", toolbar)
                 except Exception:
                     pass
 
         copy_action = toolbar.addAction("复制图片")
         copy_action.setToolTip("复制当前图表到剪贴板")
         copy_action.triggered.connect(_copy_plot_to_clipboard)
-        layout.addWidget(toolbar)
-        layout.addWidget(canvas, 1)
 
         try:
             if self._chart_type == "box":
@@ -906,6 +970,10 @@ class FloatingToolWindow(QWidget):
                     sheet_name=meta.get("sheet_name", "Data"),
                     highlight_outliers=bool(self.highlight_outliers_toggle.isChecked()),
                 )
+                try:
+                    fig.tight_layout()
+                except Exception:
+                    pass
             elif self._chart_type == "scatter":
                 render_scatter_kde_chart(fig, df, sheet_name=meta.get("sheet_name", "Data"))
             elif self._chart_type == "multi":
@@ -920,27 +988,8 @@ class FloatingToolWindow(QWidget):
             ax.text(0.5, 0.5, f"作图失败: {exc}", ha="center", va="center")
             print(f"[UI] render failed: {exc}")
 
-        if self._chart_type == "box":
-            try:
-                fig.tight_layout()
-            except Exception:
-                pass
-
-        chart_win.show()
-
-        # Ensure the plot window appears on top even when triggered via global hotkey.
-        try:
-            chart_win.raise_()
-            chart_win.activateWindow()
-        except Exception:
-            pass
-
-        def on_destroyed():
-            if chart_win in self._chart_windows:
-                self._chart_windows.remove(chart_win)
-
-        chart_win.destroyed.connect(on_destroyed)
-        self._chart_windows.append(chart_win)
+        # 【核心逻辑】将生成好的 canvas 统一扔进大画板窗口里
+        self.dashboard_window.add_chart(canvas, toolbar, meta, self._chart_type)
 
 
 def main():
