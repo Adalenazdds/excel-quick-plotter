@@ -478,9 +478,24 @@ class FloatingToolWindow(QWidget):
     def _init_ui(self) -> None:
         base_layout = QVBoxLayout(self)
         base_layout.setContentsMargins(10, 10, 10, 10)
+        
+        # 【核心修复】给布局加锁：强制窗口尺寸永远紧紧包裹内部可见控件，拒绝留白！
+        base_layout.setSizeConstraint(QVBoxLayout.SetFixedSize)
 
         self.main_frame = QFrame(self)
         self.main_frame.setObjectName("MainFrame")
+        # 设定保底宽度，防止窗口在折叠后变得过于窄小
+        self.main_frame.setMinimumWidth(320)
+        
+        # 注意：此处保留原有的 QSS 样式表绑定（如果之前是用 apply_app_styles 外部加载的，保持原样即可）
+        # 这里为了防呆，确保 MainFrame 的样式设置正确
+        self.main_frame.setStyleSheet("""
+            QFrame#MainFrame {
+                background-color: #F8F9FA;
+                border-radius: 16px;
+                border: 1px solid #E9ECEF;
+            }
+        """)
         base_layout.addWidget(self.main_frame)
 
         root = QVBoxLayout(self.main_frame)
