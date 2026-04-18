@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
+from typing import Optional
 
 from numeric_coercion import coerce_numeric_series
 
@@ -44,6 +45,7 @@ def render_box_and_scatter_chart(
     df: pd.DataFrame,
     sheet_name: str = "Data",
     highlight_outliers: bool = True,
+    excel_start_row: Optional[int] = None,
 ) -> None:
     # 1. 准备x轴的标签
     has_header = _detect_header_row(df)
@@ -61,16 +63,20 @@ def render_box_and_scatter_chart(
         data_df = df
 
     y_data_values = []
+    y_data_rows = []
     all_data = []
 
     # 2. 从DataFrame中提取每列数据，并计算全局范围
     for col in df.columns:
-        # 使用 pd.to_numeric 过滤非数字内容，再去除NaN值
+        # 使用 numeric coercion 过滤非数字内容，再去除 NaN，并保留行索引用于交互提示
         numeric_series = coerce_numeric_series(data_df[col])
-        column_data = numeric_series.dropna().tolist()
+        valid_series = numeric_series.dropna()
+        column_values = valid_series.to_numpy(dtype=float)
+        column_rows = valid_series.index.to_numpy()
 
-        y_data_values.append(column_data)
-        all_data.extend(column_data)
+        y_data_values.append(column_values.tolist())
+        y_data_rows.append(column_rows.tolist())
+        all_data.extend(column_values.tolist())
 
     if all_data:
         global_min = min(all_data)
@@ -92,11 +98,13 @@ def render_box_and_scatter_chart(
     # 3. 绘制散点图
     scatter_color = "gray"
     outlier_color = "#EE884C"
+    scatter_artists = []
     for i, (label, values) in enumerate(combined_data):
         if not values:
             continue
 
         values_arr = np.asarray(values, dtype=float)
+        rows_arr = np.asarray(y_data_rows[i], dtype=int) if i < len(y_data_rows) else np.arange(len(values_arr))
 
         # 默认所有点为灰色；可选用 IQR(1.5*IQR) 高亮离群点
         if highlight_outliers and len(values_arr) >= 4:
@@ -108,10 +116,11 @@ def render_box_and_scatter_chart(
             colors = np.where(is_outlier, outlier_color, scatter_color).tolist()
         else:
             colors = [scatter_color] * len(values_arr)
+            is_outlier = np.zeros(len(values_arr), dtype=bool)
 
         # 增加水平抖动
         x_jittered = np.random.normal(x_positions_scatter[i], 0.02, size=len(values_arr))
-        ax.scatter(
+        collection = ax.scatter(
             x_jittered,
             values_arr,
             c=colors,  # [修改] 使用 c 传入动态颜色数组
@@ -121,6 +130,21 @@ def render_box_and_scatter_chart(
             linewidth=0.5,
             label="Data Points" if i == 0 else "",
         )
+        # attach metadata for mplcursors hover tooltips
+        try:
+            setattr(
+                collection,
+                "_eqp_meta",
+                {
+                    "label": label,
+                    "rows": rows_arr,
+                    "values": values_arr,
+                    "is_outlier": is_outlier,
+                },
+            )
+        except Exception:
+            pass
+        scatter_artists.append(collection)
 
     # 4. 绘制箱线图
     valid_data_for_box = [values for _, values in combined_data]
@@ -278,3 +302,45 @@ def render_box_and_scatter_chart(
         
     # 关键追加：因为图例被移到了画布外部，需要让图表自动调整布局以防图例被窗口边缘裁切
     ax.figure.tight_layout()
+
+    # 9. 基础交互：鼠标悬浮查看数据点
+    # 注意：渲染函数可能被反复调用，需避免重复叠加 cursor
+    try:
+        import mplcursors
+
+        prev_cursor = getattr(ax.figure, "_eqp_mplcursors_cursor", None)
+        if prev_cursor is not None:
+            try:
+                prev_cursor.remove()
+            except Exception:
+                pass
+
+        if scatter_artists:
+            cursor = mplcursors.cursor(scatter_artists, hover=True)
+
+            @cursor.connect("add")
+            def _on_add(sel):
+                meta = getattr(sel.artist, "_eqp_meta", None)
+                if not meta:
+                    return
+                idx = int(sel.index)
+                rows = meta.get("rows")
+                values = meta.get("values")
+                is_outlier = meta.get("is_outlier")
+
+                row_idx = int(rows[idx]) if rows is not None else idx
+                excel_row = (int(excel_start_row) + row_idx) if excel_start_row is not None else (row_idx + 1)
+                value = float(values[idx]) if values is not None else float(sel.target[1])
+                outlier_flag = bool(is_outlier[idx]) if is_outlier is not None else False
+
+                sel.annotation.set_text(
+                    f"{meta.get('label', '')}\n"
+                    f"Excel Row: {excel_row}\n"
+                    f"Value: {value:.6g}\n"
+                    f"Outlier: {'Yes' if outlier_flag else 'No'}"
+                )
+
+            setattr(ax.figure, "_eqp_mplcursors_cursor", cursor)
+    except Exception:
+        # mplcursors not available or backend doesn't support it; ignore
+        pass

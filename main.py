@@ -122,6 +122,16 @@ class ExcelFetchWorker(QObject):
 
             df = pd.DataFrame(values)
 
+            try:
+                excel_start_row = int(getattr(selection, "row", 1))
+            except Exception:
+                excel_start_row = 1
+
+            try:
+                excel_start_col = int(getattr(selection, "column", 1))
+            except Exception:
+                excel_start_col = 1
+
             meta = {
                 "book_name": getattr(book, "name", "未知表"),
                 "sheet_name": (
@@ -133,6 +143,8 @@ class ExcelFetchWorker(QObject):
                 "filepath": getattr(book, "fullname", ""),
                 "nrows": int(getattr(df, "shape", (0, 0))[0]),
                 "ncols": int(getattr(df, "shape", (0, 0))[1]),
+                "excel_start_row": excel_start_row,
+                "excel_start_col": excel_start_col,
             }
             self.finished.emit(df, meta)
         except Exception as exc:
@@ -202,6 +214,9 @@ class ClipboardFetchWorker(QObject):
                 "filepath": "clipboard://",
                 "nrows": nrows,
                 "ncols": ncols,
+                # Clipboard 无法知道原始 Excel 行号；用 1 作为合理默认值
+                "excel_start_row": 1,
+                "excel_start_col": 1,
             }
             self.finished.emit(df, meta)
         except Exception as exc:
@@ -901,15 +916,26 @@ class FloatingToolWindow(QWidget):
                     df,
                     sheet_name=meta.get("sheet_name", "Data"),
                     highlight_outliers=bool(self.highlight_outliers_toggle.isChecked()),
+                    excel_start_row=meta.get("excel_start_row"),
                 )
                 try:
                     fig.tight_layout()
                 except Exception:
                     pass
             elif self._chart_type == "scatter":
-                render_scatter_kde_chart(fig, df, sheet_name=meta.get("sheet_name", "Data"))
+                render_scatter_kde_chart(
+                    fig,
+                    df,
+                    sheet_name=meta.get("sheet_name", "Data"),
+                    excel_start_row=meta.get("excel_start_row"),
+                )
             elif self._chart_type == "multi":
-                render_multi_scatter_kde_chart(fig, df, sheet_name=meta.get("sheet_name", "Data"))
+                render_multi_scatter_kde_chart(
+                    fig,
+                    df,
+                    sheet_name=meta.get("sheet_name", "Data"),
+                    excel_start_row=meta.get("excel_start_row"),
+                )
             elif self._chart_type == "line":
                 render_line_chart(fig, df, sheet_name=meta.get("sheet_name", "Data"))
             elif self._chart_type == "heatmap":

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -17,6 +18,7 @@ from numeric_coercion import coerce_numeric_series
 class _XYGroup:
     x: np.ndarray
     y: np.ndarray
+    rows: np.ndarray
     cmap: str
     hist_color: str
     hist_edgecolor: str
@@ -48,7 +50,23 @@ def _coerce_xy(df: pd.DataFrame, x_col: int, y_col: int) -> tuple[np.ndarray, np
     return xy["x"].to_numpy(), xy["y"].to_numpy()
 
 
-def render_multi_scatter_kde_chart(fig: Figure, df: pd.DataFrame, sheet_name: str = "Data") -> None:
+def _coerce_xy_with_rows(df: pd.DataFrame, x_col: int, y_col: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    x_raw = coerce_numeric_series(df.iloc[:, x_col])
+    y_raw = coerce_numeric_series(df.iloc[:, y_col])
+
+    xy = pd.DataFrame({"x": x_raw, "y": y_raw}).dropna(how="any")
+    if xy.shape[0] < 2:
+        raise ValueError(f"第 {x_col+1} 和 {y_col+1} 列有效数值对不足 2 行。")
+
+    return xy["x"].to_numpy(), xy["y"].to_numpy(), xy.index.to_numpy()
+
+
+def render_multi_scatter_kde_chart(
+    fig: Figure,
+    df: pd.DataFrame,
+    sheet_name: str = "Data",
+    excel_start_row: Optional[int] = None,
+) -> None:
     """Render a dynamic multi-group KDE scatter density chart."""
     
     fig.clear()
@@ -61,7 +79,7 @@ def render_multi_scatter_kde_chart(fig: Figure, df: pd.DataFrame, sheet_name: st
             break  # 最后一列落单，自动跳过
             
         try:
-            x_arr, y_arr = _coerce_xy(df, i, i + 1)
+            x_arr, y_arr, rows_arr = _coerce_xy_with_rows(df, i, i + 1)
             # 通过取模运算实现颜色的无限循环
             theme_idx = (i // 2) % len(THEMES)
             theme = THEMES[theme_idx]
@@ -70,6 +88,7 @@ def render_multi_scatter_kde_chart(fig: Figure, df: pd.DataFrame, sheet_name: st
                 _XYGroup(
                     x=x_arr,
                     y=y_arr,
+                    rows=rows_arr,
                     cmap=theme["cmap"],
                     hist_color=theme["hist_color"],
                     hist_edgecolor=theme["hist_edgecolor"],
@@ -137,6 +156,32 @@ def render_multi_scatter_kde_chart(fig: Figure, df: pd.DataFrame, sheet_name: st
             alpha=dynamic_alpha, 
             levels=12,
         )
+
+    # 为 hover 交互提供“隐形散点层”(不改变视觉效果)
+    scatter_artists = []
+    for idx, g in enumerate(groups):
+        sc = ax_main.scatter(
+            g.x,
+            g.y,
+            s=16,
+            alpha=0.0,
+            linewidths=0,
+            picker=5,
+        )
+        try:
+            setattr(
+                sc,
+                "_eqp_meta",
+                {
+                    "name": g.name,
+                    "rows": g.rows,
+                    "x": g.x,
+                    "y": g.y,
+                },
+            )
+        except Exception:
+            pass
+        scatter_artists.append(sc)
 
     ax_main.set_xlim(global_min - pad, global_max + pad)
     ax_main.set_ylim(global_min - pad, global_max + pad)
@@ -234,3 +279,39 @@ def render_multi_scatter_kde_chart(fig: Figure, df: pd.DataFrame, sheet_name: st
         cb.ax.tick_params(labelsize=9)
         
         current_y -= (cb_h + gap)
+
+    # 基础交互：鼠标悬浮查看点的 X/Y 与行号
+    try:
+        import mplcursors
+
+        prev_cursor = getattr(fig, "_eqp_mplcursors_cursor", None)
+        if prev_cursor is not None:
+            try:
+                prev_cursor.remove()
+            except Exception:
+                pass
+
+        if scatter_artists:
+            cursor = mplcursors.cursor(scatter_artists, hover=True)
+
+            @cursor.connect("add")
+            def _on_add(sel):
+                meta = getattr(sel.artist, "_eqp_meta", None)
+                if not meta:
+                    return
+                idx = int(sel.index)
+                rows = meta.get("rows")
+                x = float(meta.get("x")[idx]) if meta.get("x") is not None else float(sel.target[0])
+                y = float(meta.get("y")[idx]) if meta.get("y") is not None else float(sel.target[1])
+                row_idx = int(rows[idx]) if rows is not None else idx
+                excel_row = (int(excel_start_row) + row_idx) if excel_start_row is not None else (row_idx + 1)
+                sel.annotation.set_text(
+                    f"{meta.get('name', '')}\n"
+                    f"Excel Row: {excel_row}\n"
+                    f"X: {x:.6g}\n"
+                    f"Y: {y:.6g}"
+                )
+
+            setattr(fig, "_eqp_mplcursors_cursor", cursor)
+    except Exception:
+        pass

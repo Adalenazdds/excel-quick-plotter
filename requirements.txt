@@ -5,6 +5,7 @@ numpy
 xlwings
 seaborn
 scipy
+mplcursors
 pywin32; platform_system == "Windows"
 pynput
 keyboard
