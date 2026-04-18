@@ -1162,7 +1162,7 @@ class FloatingToolWindow(QWidget):
         # 追加“复制图片”按钮（复制当前图表到剪贴板）
         toolbar.addSeparator()
 
-        def _copy_plot_to_clipboard() -> None:
+        def _copy_plot_to_clipboard(show_tip: bool = True) -> None:
             try:
                 # 【核心逻辑变更】抛弃由于截取 UI 导致的分辨率过低和变形
                 # 直接调用 Matplotlib 渲染出高清无损、排版原生的图像到内存
@@ -1178,11 +1178,12 @@ class FloatingToolWindow(QWidget):
                     clipboard.setImage(image)
 
                 try:
-                    QToolTip.showText(
-                        QCursor.pos(),
-                        "已复制高清原图 (推荐粘贴至PPT)!",
-                        toolbar,
-                    )
+                    if show_tip:
+                        QToolTip.showText(
+                            QCursor.pos(),
+                            "已复制高清原图 (推荐粘贴至PPT)!",
+                            toolbar,
+                        )
                 except Exception:
                     pass
             except Exception as e:
@@ -1194,6 +1195,24 @@ class FloatingToolWindow(QWidget):
         copy_action = toolbar.addAction("复制图片")
         copy_action.setToolTip("复制当前图表到剪贴板")
         copy_action.triggered.connect(_copy_plot_to_clipboard)
+
+        # 【新增】双击画布区域极速复制原图，并复用 _copy_plot_to_clipboard 中的气泡提示
+        def on_canvas_click(event):
+            # 确认是鼠标双击，且为左键 (button 1)
+            if getattr(event, 'dblclick', False) and getattr(event, 'button', 1) == 1:
+                _copy_plot_to_clipboard(show_tip=False)
+                try:
+                    try:
+                        pos = QCursor.pos()
+                    except Exception:
+                        pos = canvas.mapToGlobal(QPoint(20, 20))
+
+                    # 锚定到画布控件，避免某些平台/样式下不显示
+                    QToolTip.showText(pos, "✨ 图表已复制！", canvas, canvas.rect(), 1500)
+                except Exception:
+                    pass
+                
+        canvas.mpl_connect('button_press_event', on_canvas_click)
 
         try:
             if self._chart_type == "box":
