@@ -7,7 +7,7 @@ from typing import Optional
 
 import pandas as pd
 import xlwings as xw
-from PyQt5.QtCore import QObject, QPoint, Qt, QThread, pyqtSignal
+from PyQt5.QtCore import QObject, QPoint, Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QCursor, QMouseEvent, QIcon, QImage
 from PyQt5.QtWidgets import (
     QApplication,
@@ -230,35 +230,92 @@ class ChartDashboardWindow(QWidget):
         self.resize(1000, 750)
         self.setAttribute(Qt.WA_DeleteOnClose, False)
 
-        # 1. 创建主垂直布局，消除边距
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # 2. 引入 QScrollArea（核心修改，当图表多时提供滚动条）
+        # 【新增】顶部控制栏 (带清空按钮)
+        top_bar = QWidget()
+        top_bar.setStyleSheet("background-color: #FFFFFF; border-bottom: 1px solid #D1D8E0;")
+        top_bar_layout = QHBoxLayout(top_bar)
+        top_bar_layout.setContentsMargins(20, 10, 20, 10)
+
+        dash_title = QLabel("🎨 数据分析画板 (向下堆叠)")
+        dash_title.setStyleSheet("font-size: 15px; font-weight: bold; color: #2C3E50;")
+        top_bar_layout.addWidget(dash_title)
+
+        top_bar_layout.addStretch(1)
+
+        btn_clear = QPushButton("🗑️ 清空画板")
+        btn_clear.setCursor(Qt.PointingHandCursor)
+        btn_clear.setStyleSheet(
+            """
+            QPushButton {
+                padding: 6px 15px; border-radius: 6px; 
+                background-color: #FFEAA7; border: 1px solid #FDCB6E;
+                font-weight: bold; color: #D35400;
+            }
+            QPushButton:hover { background-color: #FADE8B; }
+        """
+        )
+        btn_clear.clicked.connect(self.clear_dashboard)
+        top_bar_layout.addWidget(btn_clear)
+
+        # 【新增】画板置顶 Toggle 按钮
+        self.btn_pin = QToolButton()
+        self.btn_pin.setCheckable(True)
+        self.btn_pin.setText("📍 置顶")
+        self.btn_pin.setCursor(Qt.PointingHandCursor)
+        self.btn_pin.setStyleSheet(
+            """
+            QToolButton {
+                padding: 6px 15px; border-radius: 6px; 
+                background-color: #E2E8F0; font-weight: bold; color: #2C3E50;
+            }
+            QToolButton:checked { background-color: #A0AEC0; color: white; }
+            QToolButton:hover { background-color: #CBD5E1; }
+        """
+        )
+        self.btn_pin.toggled.connect(self._toggle_pin)
+        top_bar_layout.addWidget(self.btn_pin)
+
+        main_layout.addWidget(top_bar)
+
+        # 下方保留原有的 QScrollArea 逻辑
         self.scroll_area = QScrollArea(self)
         self.scroll_area.setObjectName("DashboardScrollArea")
-        self.scroll_area.setWidgetResizable(True)  # 允许内部网格自动填充宽度
+        self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFrameShape(QFrame.NoFrame)
-        # 多图时仅内部纵向滚动，避免出现横向滚动条影响观感
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
-        # 3. 创建真正装载网格图表的容器 widget
         self.grid_container = QWidget()
         self.grid_container.setObjectName("DashboardGridContainer")
         self.grid_layout = QGridLayout(self.grid_container)
         self.grid_layout.setSpacing(15)
         self.grid_layout.setContentsMargins(15, 15, 15, 15)
-
-        # 【核心修正 1】让所有卡片向左上角靠拢，而不是强制填满整个屏幕
         self.grid_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 
-        # 4. 将容器放入滚动区域
         self.scroll_area.setWidget(self.grid_container)
         main_layout.addWidget(self.scroll_area)
 
         self.chart_count = 0
-        self.max_columns = 1  # 多张图纵向向下堆叠
+        self.max_columns = 1 
+
+    def _toggle_pin(self, checked: bool):
+        """控制画板窗口是否始终保持在最前"""
+        self.btn_pin.setText("📌 已置顶" if checked else "📍 置顶")
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, checked)
+        self.show()
+
+    def clear_dashboard(self):
+        """一键清空画板的所有图表"""
+        for i in reversed(range(self.grid_layout.count())):
+            widget_to_remove = self.grid_layout.itemAt(i).widget()
+            self.grid_layout.removeWidget(widget_to_remove)
+            widget_to_remove.setParent(None)
+        self.chart_count = 0
+        # 【新增】清空完毕后，如果不留图表了，就直接隐藏大窗口，不占地方
+        self.hide()
 
     def add_chart(self, canvas, toolbar, meta, chart_type):
         """将生成的图表添加到网格中"""
@@ -293,13 +350,16 @@ class ChartDashboardWindow(QWidget):
         self.raise_()
         self.activateWindow()
 
+        # 【新增】延迟 50ms 等待 UI 渲染刷新后，自动滚动到最底部展示最新图表
+        QTimer.singleShot(
+            50,
+            lambda: self.scroll_area.verticalScrollBar().setValue(
+                self.scroll_area.verticalScrollBar().maximum()
+            ),
+        )
+
     def closeEvent(self, event):
-        """关闭时清空画板并隐藏，以便下次提取时是全新干净的画板"""
-        for i in reversed(range(self.grid_layout.count())):
-            widget_to_remove = self.grid_layout.itemAt(i).widget()
-            self.grid_layout.removeWidget(widget_to_remove)
-            widget_to_remove.setParent(None)
-        self.chart_count = 0
+        self.clear_dashboard()
         self.hide()
         event.ignore()
 
@@ -412,7 +472,7 @@ class FloatingToolWindow(QWidget):
         self.setWindowIcon(QIcon(resource_path("icon.ico")))
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setMinimumSize(280, 150)
+        self.setMinimumSize(280, 50)  # 放宽高度限制，允许彻底折叠
         self.resize(320, 240)
 
     def _init_ui(self) -> None:
@@ -627,6 +687,62 @@ class FloatingToolWindow(QWidget):
         self.setWindowFlag(Qt.WindowStaysOnTopHint, on)
         self.show()
 
+    def _bring_widget_to_front(self, widget: QWidget, force_topmost: bool = False) -> None:
+        try:
+            widget.show()
+        except Exception:
+            pass
+
+        try:
+            widget.setWindowState(
+                (widget.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive
+            )
+        except Exception:
+            pass
+
+        # Windows may ignore activateWindow() when called from background;
+        # toggling TopMost briefly makes the window reliably jump to front.
+        if force_topmost:
+            try:
+                was_topmost = bool(widget.windowFlags() & Qt.WindowStaysOnTopHint)
+                if not was_topmost:
+                    widget.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+                    widget.show()
+
+                try:
+                    widget.raise_()
+                except Exception:
+                    pass
+                try:
+                    widget.activateWindow()
+                except Exception:
+                    pass
+
+                if not was_topmost:
+                    QTimer.singleShot(
+                        200,
+                        lambda: (
+                            widget.setWindowFlag(Qt.WindowStaysOnTopHint, False),
+                            widget.show(),
+                        ),
+                    )
+                    return
+            except Exception:
+                pass
+
+        try:
+            widget.raise_()
+        except Exception:
+            pass
+        try:
+            widget.activateWindow()
+        except Exception:
+            pass
+        try:
+            QApplication.setActiveWindow(widget)
+        except Exception:
+            pass
+
     def _on_extract_plot_clicked(self) -> None:
         if self._excel_thread is not None and self._excel_thread.isRunning():
             return
@@ -830,6 +946,21 @@ class FloatingToolWindow(QWidget):
                 return
         super().mousePressEvent(event)
 
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton:
+            # 当双击靠上方的区域（类似标题栏）时触发折叠/展开
+            if event.pos().y() < 60:
+                is_visible = self.info_card.isVisible()
+                # 切换卡片和按钮的显示状态
+                self.info_card.setVisible(not is_visible)
+                self.action_button.setVisible(not is_visible)
+                self.hotkey_hint_label.setVisible(not is_visible)
+                # 让窗口自动缩小/放大以适应内容
+                self.adjustSize()
+                event.accept()
+                return
+        super().mouseDoubleClickEvent(event)
+
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if (self._drag_active and (event.buttons() & Qt.LeftButton) and self._drag_offset is not None):
             self.move(event.globalPos() - self._drag_offset)
@@ -871,6 +1002,12 @@ class FloatingToolWindow(QWidget):
 
         # 实例化 Toolbar，parent 设为 None，稍后由画板容器接管
         toolbar = NavigationToolbar(canvas, None)
+
+        # 【新增】精简原生工具栏，移除对用户无用或危险的按钮（如调节子图边距的滑块）
+        for action in toolbar.actions():
+            tooltip = action.toolTip() or ""
+            if "Subplots" in tooltip or "Customize" in tooltip:
+                toolbar.removeAction(action)
 
         # 追加“复制图片”按钮（复制当前图表到剪贴板）
         toolbar.addSeparator()
@@ -953,6 +1090,10 @@ class FloatingToolWindow(QWidget):
 
         # 【核心逻辑】将生成好的 canvas 统一扔进大画板窗口里
         self.dashboard_window.add_chart(canvas, toolbar, meta, self._chart_type)
+
+        # Hotkey-triggered charts should jump to the front even when Excel is foreground.
+        if self._pending_hotkey_trigger:
+            self._bring_widget_to_front(self.dashboard_window, force_topmost=True)
 
 
 def main():
