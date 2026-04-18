@@ -199,7 +199,7 @@ class ChartDashboardWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("数据分析画板 - 多图集")
-        self.resize(1150, 700)
+        self.resize(1000, 750)
         self.setAttribute(Qt.WA_DeleteOnClose, False)
 
         # 1. 创建主垂直布局，消除边距
@@ -211,6 +211,9 @@ class ChartDashboardWindow(QWidget):
         self.scroll_area.setWidgetResizable(True)  # 允许内部网格自动填充宽度
         self.scroll_area.setFrameShape(QFrame.NoFrame)
         self.scroll_area.setStyleSheet("QScrollArea { background-color: #F4F6F8; }")
+        # 多图时仅内部纵向滚动，避免出现横向滚动条影响观感
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
         # 3. 创建真正装载网格图表的容器 widget
         self.grid_container = QWidget()
@@ -219,12 +222,15 @@ class ChartDashboardWindow(QWidget):
         self.grid_layout.setSpacing(15)
         self.grid_layout.setContentsMargins(15, 15, 15, 15)
 
+        # 【核心修正 1】让所有卡片向左上角靠拢，而不是强制填满整个屏幕
+        self.grid_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+
         # 4. 将容器放入滚动区域
         self.scroll_area.setWidget(self.grid_container)
         main_layout.addWidget(self.scroll_area)
 
         self.chart_count = 0
-        self.max_columns = 3  # 一行最多显示 3 张图
+        self.max_columns = 1  # 多张图纵向向下堆叠
 
     def add_chart(self, canvas, toolbar, meta, chart_type):
         """将生成的图表添加到网格中"""
@@ -239,8 +245,11 @@ class ChartDashboardWindow(QWidget):
             }
         """
         )
-        # 【关键修改】为单张图表卡片设置最小尺寸，防止被无限压缩导致图表内部文字重叠！
-        container.setMinimumSize(420, 360)
+
+        # 【核心修正 2】严格保护图表比例！
+        # 设定保底宽度 600 保证横向文字不重叠；设定固定高度 480 拒绝被垂直拉伸
+        container.setMinimumWidth(600)
+        container.setFixedHeight(480)
 
         vbox = QVBoxLayout(container)
         vbox.setContentsMargins(10, 10, 10, 10)
@@ -987,6 +996,11 @@ class FloatingToolWindow(QWidget):
             ax = fig.add_subplot(111)
             ax.text(0.5, 0.5, f"作图失败: {exc}", ha="center", va="center")
             print(f"[UI] render failed: {exc}")
+
+        try:
+            fig.tight_layout()
+        except Exception:
+            pass
 
         # 【核心逻辑】将生成好的 canvas 统一扔进大画板窗口里
         self.dashboard_window.add_chart(canvas, toolbar, meta, self._chart_type)
