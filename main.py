@@ -8,14 +8,16 @@ from typing import Optional
 import pandas as pd
 import xlwings as xw
 from PyQt5.QtCore import QObject, QPoint, Qt, QThread, pyqtSignal, QTimer, QPropertyAnimation
-from PyQt5.QtGui import QCursor, QMouseEvent, QIcon, QImage
+from PyQt5.QtGui import QCursor, QMouseEvent, QIcon, QImage, QColor
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QFrame,
+    QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QFileDialog,
     QLineEdit,
     QMenu,
     QPushButton,
@@ -246,6 +248,20 @@ class ChartDashboardWindow(QWidget):
 
         top_bar_layout.addStretch(1)
 
+        # 【新增】批量导出按钮
+        btn_export = QPushButton("💾 批量导出")
+        btn_export.setCursor(Qt.PointingHandCursor)
+        btn_export.setStyleSheet("""
+            QPushButton {
+                padding: 6px 15px; border-radius: 6px; 
+                background-color: #D4EDDA; border: 1px solid #C3E6CB;
+                font-weight: bold; color: #155724; margin-right: 10px;
+            }
+            QPushButton:hover { background-color: #C3E6CB; }
+        """)
+        btn_export.clicked.connect(self.export_all_charts)
+        top_bar_layout.addWidget(btn_export)
+
         btn_clear = QPushButton("🗑️ 清空画板")
         btn_clear.setCursor(Qt.PointingHandCursor)
         btn_clear.setStyleSheet(
@@ -318,6 +334,50 @@ class ChartDashboardWindow(QWidget):
         # 【新增】清空完毕后，如果不留图表了，就直接隐藏大窗口，不占地方
         self.hide()
 
+    def export_all_charts(self):
+        """【新增】将当前画板中的所有图表批量保存到指定文件夹"""
+        if self.grid_layout.count() == 0:
+            return
+
+        folder = QFileDialog.getExistingDirectory(self, "选择保存目录")
+        if not folder:
+            return
+
+        saved_count = 0
+        # 遍历网格中的所有卡片
+        for i in range(self.grid_layout.count()):
+            item = self.grid_layout.itemAt(i)
+            if not item or not item.widget():
+                continue
+
+            card = item.widget()
+            title_edit = card.findChild(QLineEdit)
+            canvas = card.findChild(FigureCanvas)
+
+            if title_edit and canvas:
+                # 提取标题并过滤掉不能作为文件名的非法字符
+                safe_title = "".join(
+                    c for c in title_edit.text() if c.isalnum() or c in " _-[]"
+                ).strip()
+                if not safe_title:
+                    safe_title = f"Chart_{i+1}"
+
+                filepath = os.path.join(folder, f"{safe_title}.png")
+                try:
+                    # 导出高清底图
+                    canvas.figure.savefig(
+                        filepath,
+                        format="png",
+                        dpi=250,
+                        bbox_inches="tight",
+                        facecolor="white",
+                    )
+                    saved_count += 1
+                except Exception as e:
+                    print(f"Failed to save {filepath}: {e}")
+
+        QToolTip.showText(QCursor.pos(), f"✅ 成功导出 {saved_count} 张图表！")
+
     def add_chart(self, canvas, toolbar, meta, chart_type):
         """将生成的图表添加到网格中"""
         container = QFrame()
@@ -332,12 +392,13 @@ class ChartDashboardWindow(QWidget):
         vbox = QVBoxLayout(container)
         vbox.setContentsMargins(10, 10, 10, 10)
 
-        # 将原有 title_label 相关代码替换为以下 QLineEdit 代码
+        # 将原有的 title_edit 相关的代码替换为以下带有删除按钮的水平布局结构
+        title_layout = QHBoxLayout()
+        title_layout.setContentsMargins(0, 0, 0, 0)
+
         title_text = f"[{chart_type.upper()}] {meta.get('sheet_name', '')} | {meta.get('address', '')}"
         title_edit = QLineEdit(title_text)
         title_edit.setAlignment(Qt.AlignCenter)
-        title_edit.setProperty("role", "chartTitle")
-        # 设置样式：默认无边框像普通文本，悬浮时提示可编辑，选中时高亮
         title_edit.setStyleSheet("""
             QLineEdit {
                 font-weight: bold; font-size: 13px; color: #2C3E50; 
@@ -346,7 +407,28 @@ class ChartDashboardWindow(QWidget):
             QLineEdit:hover { border: 1px dashed #BDC3C7; background: #F8F9FA; border-radius: 4px; }
             QLineEdit:focus { border: 1px solid #3DC2EC; background: #FFFFFF; border-radius: 4px; }
         """)
-        vbox.addWidget(title_edit)
+
+        # 【新增】单图删除按钮
+        btn_remove_card = QToolButton()
+        btn_remove_card.setText("×")
+        btn_remove_card.setToolTip("移除此图表")
+        btn_remove_card.setCursor(Qt.PointingHandCursor)
+        btn_remove_card.setStyleSheet("""
+            QToolButton { border: none; font-size: 18px; font-weight: bold; color: #BDC3C7; }
+            QToolButton:hover { color: #E74C3C; }
+        """)
+
+        # 删除当前卡片的闭包逻辑
+        def _remove_this_card():
+            self.grid_layout.removeWidget(container)
+            container.deleteLater()
+
+        btn_remove_card.clicked.connect(_remove_this_card)
+
+        title_layout.addWidget(title_edit, 1)
+        title_layout.addWidget(btn_remove_card, 0)
+
+        vbox.addLayout(title_layout)
         vbox.addWidget(toolbar)
         vbox.addWidget(canvas, 1)
 
@@ -525,6 +607,13 @@ class FloatingToolWindow(QWidget):
                 border: 1px solid #E9ECEF;
             }
         """)
+
+        # 【新增】为悬浮窗添加柔和的物理弥散阴影，提升高级感
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(20)  # 阴影模糊半径
+        shadow.setColor(QColor(0, 0, 0, 60))  # 带有一定透明度的纯黑阴影
+        shadow.setOffset(0, 4)  # 垂直方向向下偏移，模拟真实光源
+        self.main_frame.setGraphicsEffect(shadow)
         base_layout.addWidget(self.main_frame)
 
         root = QVBoxLayout(self.main_frame)
