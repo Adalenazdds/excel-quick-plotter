@@ -6,3 +6,5 @@ xlwings
 seaborn
 scipy
 pywin32; platform_system == "Windows"
+pynput
+keyboard

@@ -9,7 +9,7 @@ from matplotlib.colors import Normalize
 from matplotlib.figure import Figure
 
 
-def _coerce_numeric_matrix(df: pd.DataFrame) -> pd.DataFrame:
+def coerce_numeric_matrix(df: pd.DataFrame) -> pd.DataFrame:
 	cleaned = df.copy()
 
 	# Normalize string cells: strip whitespace; treat empty as missing.
@@ -41,7 +41,7 @@ def render_heatmap_chart(fig: Figure, df: pd.DataFrame, sheet_name: str = "Data"
 
 	fig.clear()
 
-	numeric_df = _coerce_numeric_matrix(df)
+	numeric_df = coerce_numeric_matrix(df)
 	data = numeric_df.to_numpy(dtype=float)
 
 	rows, cols = int(data.shape[0]), int(data.shape[1])

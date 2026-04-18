@@ -21,7 +21,7 @@
 项目基于 **Python 3.7+** 开发，建议使用虚拟环境运行，所需核心库如下：
 
 ```bash
-pip install PyQt5 matplotlib pandas numpy xlwings seaborn scipy
+pip install PyQt5 matplotlib pandas numpy xlwings seaborn scipy pynput keyboard
 ```
 
 > **注意：** 操作 Excel 数据时，依赖本机的 Office Excel (或通过 xlwings 驱动的其他兼容应用)，请勿以系统管理员权限分别启动 Excel 和 Python 脚本，以防跨权限导致 COM 接口拒绝访问。
@@ -33,6 +33,7 @@ pip install PyQt5 matplotlib pandas numpy xlwings seaborn scipy
    - 每一列会被识别为一组独立的数据。
    - 框选范围可包含第一行的文字表头，程序绘图时会自动丢弃非数字字符。
 3. 点击悬浮窗的 **“提取并作图”** 按钮。
+  - 或直接按 **全局快捷键 `左Alt+K`**（无需切回悬浮窗焦点），程序会立刻读取当前 Excel 选区/剪贴板并弹出图表。
 4. 程序将自动弹出高度自适应绘图面板，展示对应的统计复合图表。您可以通过图表上方的工具栏缩放或保存高质量图片。
 
 ### 🌐 Google Sheets（在线表格）一键作图

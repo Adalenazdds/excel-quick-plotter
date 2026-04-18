@@ -1,14 +1,13 @@
 import os
 import sys
 import traceback
-import copy
 from io import StringIO
 from typing import Optional
 
 import pandas as pd
 import xlwings as xw
 from PyQt5.QtCore import QObject, QPoint, Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QMouseEvent, QIcon
+from PyQt5.QtGui import QCursor, QMouseEvent, QIcon
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -18,24 +17,33 @@ from PyQt5.QtWidgets import (
     QMenu,
     QPushButton,
     QSizePolicy,
+    QToolTip,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 import matplotlib
-import numpy as np
-import matplotlib.cm as cm
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
-from matplotlib.colors import Normalize
 from matplotlib.figure import Figure
 
-# 确保你的同级目录下有这三个文件
+try:
+    from pynput import keyboard as _pynput_keyboard
+except Exception:
+    _pynput_keyboard = None
+
+try:
+    import keyboard as _keyboard
+except Exception:
+    _keyboard = None
+
+# 确保同级目录下有这些模块文件
 from box_plot import render_box_and_scatter_chart
 from scatter_plot import render_scatter_kde_chart
 from scatter_plot_multi import render_multi_scatter_kde_chart
 from line_plot import render_line_chart
+from heatmap_plot import render_heatmap_chart, coerce_numeric_matrix
 
 try:
     import pythoncom as _pythoncom
@@ -159,104 +167,6 @@ def _parse_tabular_text_to_df(text: str) -> pd.DataFrame:
     return df
 
 
-def _coerce_numeric_matrix(df: pd.DataFrame) -> pd.DataFrame:
-    cleaned = df.copy()
-
-    cleaned = cleaned.apply(
-        lambda col: col.map(lambda v: v.strip() if isinstance(v, str) else v)
-    )
-    cleaned = cleaned.replace(r"^\s*$", pd.NA, regex=True)
-
-    numeric_df = cleaned.apply(lambda col: pd.to_numeric(col, errors="coerce"))
-    numeric_df = numeric_df.dropna(axis=0, how="all").dropna(axis=1, how="all")
-
-    if numeric_df.shape[0] == 0 or numeric_df.shape[1] == 0:
-        raise ValueError("未找到有效数值矩阵")
-    if not np.isfinite(numeric_df.to_numpy(dtype=float)).any():
-        raise ValueError("未找到有效数值矩阵")
-
-    return numeric_df
-
-
-def render_heatmap_chart(fig: Figure, df: pd.DataFrame, sheet_name: str = "Data") -> None:
-    """Render a Matplotlib heatmap from a rectangular Excel selection.
-
-    Requirements:
-    - Each cell is 1:1 (square) via equal aspect.
-    - No internal white gridlines between cells.
-    """
-
-    fig.clear()
-
-    numeric_df = _coerce_numeric_matrix(df)
-    data = numeric_df.to_numpy(dtype=float)
-
-    rows, cols = int(data.shape[0]), int(data.shape[1])
-    finite_mask = np.isfinite(data)
-
-    vmin = float(np.nanmin(data))
-    vmax = float(np.nanmax(data))
-    if not np.isfinite(vmin) or not np.isfinite(vmax):
-        raise ValueError("未找到有效数值矩阵")
-
-    ax = fig.add_subplot(111)
-
-    fig.subplots_adjust(left=0.06, right=0.88, top=0.90, bottom=0.06)
-    fig.suptitle(f"Heatmap - {sheet_name}", fontsize=14, fontweight="bold", y=0.97)
-
-    cmap_base = cm.get_cmap("Blues")
-    cmap = copy.copy(cmap_base)
-    try:
-        cmap.set_bad(color="#E5E7EB")
-    except Exception:
-        pass
-
-    masked = np.ma.masked_invalid(data)
-    im = ax.imshow(
-        masked,
-        cmap=cmap,
-        interpolation="none",
-        aspect="equal",
-        vmin=vmin,
-        vmax=vmax,
-        resample=False,
-    )
-
-    # Pixel-aligned edges (half-pixel boundaries) for cleaner rendering.
-    ax.set_xlim(-0.5, cols - 0.5)
-    ax.set_ylim(rows - 0.5, -0.5)
-
-    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.02)
-    cbar.ax.tick_params(labelsize=9)
-
-    ax.set_xticks([])
-    ax.set_yticks([])
-
-    annotate_threshold = 400
-    if rows * cols <= annotate_threshold:
-        norm = Normalize(vmin=vmin, vmax=vmax)
-        for r in range(rows):
-            for c in range(cols):
-                if not finite_mask[r, c]:
-                    continue
-                val = float(data[r, c])
-                intensity = float(norm(val)) if vmax != vmin else 0.0
-                text_color = "white" if intensity >= 0.60 else "black"
-                ax.text(
-                    c,
-                    r,
-                    f"{val:.3g}",
-                    ha="center",
-                    va="center",
-                    fontsize=8,
-                    color=text_color,
-                )
-
-    for spine in ax.spines.values():
-        spine.set_color("black")
-        spine.set_linewidth(1)
-
-
 class ClipboardFetchWorker(QObject):
     finished = pyqtSignal(object, dict)  # pandas.DataFrame, metadata dict
     failed = pyqtSignal(str)
@@ -282,6 +192,88 @@ class ClipboardFetchWorker(QObject):
             self.failed.emit(str(exc))
 
 
+class _HotkeyBridge(QObject):
+    triggered = pyqtSignal()
+
+
+class _GlobalHotkeyManager:
+    def __init__(self, bridge: _HotkeyBridge, shortcut: str = "<ctrl>+q"):
+        self._bridge = bridge
+        self._shortcut = shortcut
+        self._listener = None
+        self._keyboard_hotkey = None
+
+    @property
+    def available(self) -> bool:
+        return _keyboard is not None or _pynput_keyboard is not None
+
+    def start(self) -> bool:
+        if not self.available:
+            return False
+
+        if self._listener is not None:
+            return True
+
+        # Prefer `keyboard` on Windows because it can suppress the keystrokes
+        # so foreground apps (e.g. Excel) won't beep / consume Alt+Key.
+        if _keyboard is not None:
+            try:
+                def _on_activate() -> None:
+                    try:
+                        self._bridge.triggered.emit()
+                    except Exception:
+                        pass
+
+                # `keyboard` hotkey syntax differs from pynput.
+                # We use left-alt specifically to avoid conflicting with right-alt (AltGr).
+                hotkey = "left alt+k" if self._shortcut == "<alt_l>+k" else "alt+k"
+                self._keyboard_hotkey = _keyboard.add_hotkey(
+                    hotkey,
+                    _on_activate,
+                    suppress=True,
+                    trigger_on_release=False,
+                )
+                return True
+            except Exception:
+                self._keyboard_hotkey = None
+                # Fall back to pynput.
+
+        try:
+            def _on_activate() -> None:
+                try:
+                    self._bridge.triggered.emit()
+                except Exception:
+                    pass
+
+            self._listener = _pynput_keyboard.GlobalHotKeys({self._shortcut: _on_activate})
+            self._listener.start()
+            return True
+        except Exception:
+            self._listener = None
+            return False
+
+    def stop(self) -> None:
+        if _keyboard is not None and self._keyboard_hotkey is not None:
+            try:
+                _keyboard.remove_hotkey(self._keyboard_hotkey)
+            except Exception:
+                pass
+            try:
+                _keyboard.unhook_all()
+            except Exception:
+                pass
+            self._keyboard_hotkey = None
+
+        listener = self._listener
+        self._listener = None
+        if listener is None:
+            return
+        try:
+            listener.stop()
+        except Exception:
+            pass
+
+
 class FloatingToolWindow(QWidget):
 
     def __init__(self):
@@ -295,6 +287,7 @@ class FloatingToolWindow(QWidget):
         self._last_df = None
         self._chart_windows = []
         self._chart_type = "box"  # box | scatter | multi | heatmap
+        self._pending_hotkey_trigger = False
 
         self._init_window()
         self._init_ui()
@@ -463,6 +456,7 @@ class FloatingToolWindow(QWidget):
         # -- 底部高亮主按钮 --
         self.action_button = QPushButton("✨ 提取并作图", self.main_frame)
         self.action_button.setCursor(Qt.PointingHandCursor)
+        self.action_button.setToolTip("点击按钮或按全局快捷键 左Alt+K")
         self.action_button.setStyleSheet("""
             QPushButton {
                 background-color: #3DC2EC;
@@ -479,6 +473,17 @@ class FloatingToolWindow(QWidget):
         """)
         self.action_button.clicked.connect(self._on_extract_plot_clicked)
         root.addWidget(self.action_button)
+
+        self.hotkey_hint_label = QLabel("全局快捷键：左Alt+K", self.main_frame)
+        self.hotkey_hint_label.setStyleSheet("font-size:11px; color:#95A5A6;")
+        self.hotkey_hint_label.setAlignment(Qt.AlignCenter)
+        root.addWidget(self.hotkey_hint_label)
+
+    def _on_hotkey_triggered(self) -> None:
+        # Mark this extraction as hotkey-originated so the chart window can be
+        # brought to front more aggressively on Windows.
+        self._pending_hotkey_trigger = True
+        self._on_extract_plot_clicked()
 
     def _create_pill_row(self, parent_layout, label_text, object_name, bg_color, text_color):
         row_layout = QHBoxLayout()
@@ -630,6 +635,7 @@ class FloatingToolWindow(QWidget):
         self.action_button.setText("✨ 提取并作图")
         self._excel_thread = None
         self._excel_worker = None
+        self._pending_hotkey_trigger = False
 
     def _on_excel_fetch_failed(self, _message: str) -> None:
         try:
@@ -650,6 +656,7 @@ class FloatingToolWindow(QWidget):
         self.action_button.setText("✨ 提取并作图")
         self._excel_thread = None
         self._excel_worker = None
+        self._pending_hotkey_trigger = False
 
     def _start_clipboard_fetch(self) -> None:
         try:
@@ -694,6 +701,7 @@ class FloatingToolWindow(QWidget):
         self.action_button.setText("✨ 提取并作图")
         self._excel_thread = None
         self._excel_worker = None
+        self._pending_hotkey_trigger = False
 
     def _on_clipboard_fetch_failed(self, _message: str) -> None:
         try:
@@ -705,6 +713,7 @@ class FloatingToolWindow(QWidget):
         self.action_button.setText("✨ 提取并作图")
         self._excel_thread = None
         self._excel_worker = None
+        self._pending_hotkey_trigger = False
 
     def _set_info_placeholder(self) -> None:
         self.info_title.setText("等待框选数据...")
@@ -826,7 +835,7 @@ class FloatingToolWindow(QWidget):
             # Heatmap needs equal-aspect cells; pick a figure/window size that matches rows/cols
             # to avoid excessive letterboxing.
             try:
-                numeric_df = _coerce_numeric_matrix(df)
+                numeric_df = coerce_numeric_matrix(df)
                 rows, cols = int(numeric_df.shape[0]), int(numeric_df.shape[1])
             except Exception:
                 rows, cols = int(getattr(df, "shape", (1, 1))[0]), int(getattr(df, "shape", (1, 1))[1])
@@ -843,12 +852,48 @@ class FloatingToolWindow(QWidget):
         chart_win.setAttribute(Qt.WA_DeleteOnClose)
         chart_win.setWindowTitle(f"分析图表 - {meta.get('book_name', '')} | 范围: {meta.get('address', '')}")
         chart_win.resize(win_width, win_height)
+
+        if self._pending_hotkey_trigger:
+            try:
+                chart_win.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+            except Exception:
+                pass
         
         layout = QVBoxLayout(chart_win)
         fig = Figure(figsize=(fig_width, fig_height), dpi=100)
         canvas = FigureCanvas(fig)
 
         toolbar = NavigationToolbar(canvas, chart_win)
+        toolbar.addSeparator()
+
+        def _copy_plot_to_clipboard() -> None:
+            try:
+                # Ensure the latest render is captured.
+                try:
+                    canvas.draw()
+                except Exception:
+                    pass
+
+                pixmap = canvas.grab()
+                clipboard = QApplication.clipboard()
+                if clipboard is not None:
+                    clipboard.setPixmap(pixmap)
+
+                # Lightweight toast-like feedback.
+                try:
+                    QToolTip.showText(QCursor.pos(), "已复制!", toolbar)
+                except Exception:
+                    pass
+            except Exception:
+                # Clipboard may be unavailable in some environments.
+                try:
+                    QToolTip.showText(QCursor.pos(), "复制失败", toolbar)
+                except Exception:
+                    pass
+
+        copy_action = toolbar.addAction("复制图片")
+        copy_action.setToolTip("复制当前图表到剪贴板")
+        copy_action.triggered.connect(_copy_plot_to_clipboard)
         layout.addWidget(toolbar)
         layout.addWidget(canvas, 1)
 
@@ -883,6 +928,13 @@ class FloatingToolWindow(QWidget):
 
         chart_win.show()
 
+        # Ensure the plot window appears on top even when triggered via global hotkey.
+        try:
+            chart_win.raise_()
+            chart_win.activateWindow()
+        except Exception:
+            pass
+
         def on_destroyed():
             if chart_win in self._chart_windows:
                 self._chart_windows.remove(chart_win)
@@ -897,6 +949,22 @@ def main():
     
     app = QApplication(sys.argv)
     window = FloatingToolWindow()
+
+    # Global hotkey (Left Alt+K) triggers the same action as clicking the button.
+    hotkey_bridge = _HotkeyBridge()
+    hotkey_bridge.triggered.connect(window._on_hotkey_triggered)
+    hotkey_manager = _GlobalHotkeyManager(hotkey_bridge, shortcut="<alt_l>+k")
+    started = hotkey_manager.start()
+    if not started:
+        try:
+            window.hotkey_hint_label.setText("全局快捷键不可用")
+        except Exception:
+            pass
+
+    def _cleanup_hotkey():
+        hotkey_manager.stop()
+
+    app.aboutToQuit.connect(_cleanup_hotkey)
     window.show()
     return app.exec()
 
