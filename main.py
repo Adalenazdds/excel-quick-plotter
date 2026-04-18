@@ -7,7 +7,7 @@ from typing import Optional
 
 import pandas as pd
 import xlwings as xw
-from PyQt5.QtCore import QObject, QPoint, Qt, QThread, pyqtSignal, QTimer
+from PyQt5.QtCore import QObject, QPoint, Qt, QThread, pyqtSignal, QTimer, QPropertyAnimation
 from PyQt5.QtGui import QCursor, QMouseEvent, QIcon, QImage
 from PyQt5.QtWidgets import (
     QApplication,
@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMenu,
     QPushButton,
     QScrollArea,
@@ -331,12 +332,21 @@ class ChartDashboardWindow(QWidget):
         vbox = QVBoxLayout(container)
         vbox.setContentsMargins(10, 10, 10, 10)
 
+        # 将原有 title_label 相关代码替换为以下 QLineEdit 代码
         title_text = f"[{chart_type.upper()}] {meta.get('sheet_name', '')} | {meta.get('address', '')}"
-        title_label = QLabel(title_text)
-        title_label.setAlignment(Qt.AlignCenter)
-        title_label.setProperty("role", "chartTitle")
-
-        vbox.addWidget(title_label)
+        title_edit = QLineEdit(title_text)
+        title_edit.setAlignment(Qt.AlignCenter)
+        title_edit.setProperty("role", "chartTitle")
+        # 设置样式：默认无边框像普通文本，悬浮时提示可编辑，选中时高亮
+        title_edit.setStyleSheet("""
+            QLineEdit {
+                font-weight: bold; font-size: 13px; color: #2C3E50; 
+                border: 1px solid transparent; background: transparent; padding: 2px;
+            }
+            QLineEdit:hover { border: 1px dashed #BDC3C7; background: #F8F9FA; border-radius: 4px; }
+            QLineEdit:focus { border: 1px solid #3DC2EC; background: #FFFFFF; border-radius: 4px; }
+        """)
+        vbox.addWidget(title_edit)
         vbox.addWidget(toolbar)
         vbox.addWidget(canvas, 1)
 
@@ -466,6 +476,25 @@ class FloatingToolWindow(QWidget):
 
         self._init_window()
         self._init_ui()
+
+        # 初始透明度：100%
+        self.setWindowOpacity(1.0)
+
+    def enterEvent(self, event) -> None:
+        """鼠标进入时，恢复100%不透明"""
+        self._opacity_anim = QPropertyAnimation(self, b"windowOpacity")
+        self._opacity_anim.setDuration(150)
+        self._opacity_anim.setEndValue(1.0)
+        self._opacity_anim.start()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        """鼠标离开时，半透明化以防止遮挡底层 Excel 数据"""
+        self._opacity_anim = QPropertyAnimation(self, b"windowOpacity")
+        self._opacity_anim.setDuration(300)
+        self._opacity_anim.setEndValue(0.4)  # 40% 的不透明度，既可见又不挡视线
+        self._opacity_anim.start()
+        super().leaveEvent(event)
 
     def _init_window(self) -> None:
         self.setWindowTitle("EXCEL快速分析")
@@ -984,9 +1013,26 @@ class FloatingToolWindow(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.LeftButton and self._drag_active:
             self._drag_active = False
             self._drag_offset = None
+            
+            # 【新增】磁吸边缘逻辑
+            screen_geo = QApplication.primaryScreen().availableGeometry()
+            current_geo = self.frameGeometry()
+            snap_dist = 30  # 吸附阈值
+
+            if current_geo.left() < screen_geo.left() + snap_dist:
+                current_geo.moveLeft(screen_geo.left())
+            elif current_geo.right() > screen_geo.right() - snap_dist:
+                current_geo.moveRight(screen_geo.right())
+
+            if current_geo.top() < screen_geo.top() + snap_dist:
+                current_geo.moveTop(screen_geo.top())
+            elif current_geo.bottom() > screen_geo.bottom() - snap_dist:
+                current_geo.moveBottom(screen_geo.bottom())
+
+            self.move(current_geo.topLeft())
             event.accept()
             return
         super().mouseReleaseEvent(event)
