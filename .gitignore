@@ -17,6 +17,7 @@ dist_onefile/
 build_onefile_work/
 *.exe
 *.pkg
+*.rar
 dist/
 dist_onefile/
 *.egg-info/
