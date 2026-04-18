@@ -8,19 +8,41 @@ import matplotlib.cm as cm
 from matplotlib.colors import Normalize
 from matplotlib.figure import Figure
 
+from numeric_coercion import normalize_numeric_like
 
-def coerce_numeric_matrix(df: pd.DataFrame) -> pd.DataFrame:
-	cleaned = df.copy()
 
-	# Normalize string cells: strip whitespace; treat empty as missing.
-	cleaned = cleaned.apply(lambda col: col.map(lambda v: v.strip() if isinstance(v, str) else v))
-	cleaned = cleaned.replace(r"^\s*$", pd.NA, regex=True)
+def coerce_numeric_matrix(df: pd.DataFrame, *, missing: str = "keep") -> pd.DataFrame:
+	"""Coerce a DataFrame to a numeric matrix.
+
+	- Strips whitespace
+	- Treats empty strings as missing
+	- Supports common formats like "1,000" and "12%" (percent sign is stripped)
+	- Converts non-numeric cells to NaN
+
+	Parameters
+	----------
+	missing:
+		"keep" (default): keep NaN; heatmap will mask them.
+		"fill0": fill NaN with 0.
+		"drop": drop rows/cols that contain any NaN.
+	"""
+
+	cleaned = normalize_numeric_like(df.copy())
 
 	# Convert to numeric. Non-numeric becomes NaN.
 	numeric_df = cleaned.apply(lambda col: pd.to_numeric(col, errors="coerce"))
 
 	# Drop fully empty rows/cols after numeric coercion.
 	numeric_df = numeric_df.dropna(axis=0, how="all").dropna(axis=1, how="all")
+
+	if missing == "fill0":
+		numeric_df = numeric_df.fillna(0)
+	elif missing == "drop":
+		numeric_df = numeric_df.dropna(axis=0, how="any").dropna(axis=1, how="any")
+	elif missing == "keep":
+		pass
+	else:
+		raise ValueError(f"unknown missing strategy: {missing!r}")
 
 	if numeric_df.shape[0] == 0 or numeric_df.shape[1] == 0:
 		raise ValueError("未找到有效数值矩阵")

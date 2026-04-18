@@ -9,6 +9,8 @@ from matplotlib.colors import Normalize
 from matplotlib.figure import Figure
 import matplotlib.cm as cm
 
+from numeric_coercion import coerce_numeric_series
+
 
 @dataclass(frozen=True)
 class _XYGroup:
@@ -24,8 +26,8 @@ def _coerce_xy(df: pd.DataFrame, x_col: int, y_col: int) -> tuple[np.ndarray, np
     if df.shape[1] <= max(x_col, y_col):
         raise ValueError("选区列数不足：scatter_plot 至少需要 2 列 (X,Y)。")
 
-    x_raw = pd.to_numeric(df.iloc[:, x_col], errors="coerce")
-    y_raw = pd.to_numeric(df.iloc[:, y_col], errors="coerce")
+    x_raw = coerce_numeric_series(df.iloc[:, x_col])
+    y_raw = coerce_numeric_series(df.iloc[:, y_col])
 
     xy = pd.DataFrame({"x": x_raw, "y": y_raw}).dropna(how="any")
     if xy.shape[0] < 2:

@@ -6,6 +6,8 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 import matplotlib.cm as cm
 
+from numeric_coercion import coerce_numeric_series
+
 
 def _is_numeric(val) -> bool:
     """辅助函数：判断单元格是否为纯数字"""
@@ -65,7 +67,7 @@ def render_line_chart(fig: Figure, df: pd.DataFrame, sheet_name: str = "Data") -
         color = line_colors[row_idx]
         
         # 强制转换为数值
-        y_series = pd.to_numeric(data_df.iloc[row_idx, :], errors="coerce")
+        y_series = coerce_numeric_series(data_df.iloc[row_idx, :])
         y = y_series.to_numpy(dtype=float)
         
         # 行标签（如果数据包含表头，行索引需要偏移）

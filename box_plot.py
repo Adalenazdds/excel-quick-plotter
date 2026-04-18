@@ -3,6 +3,8 @@ import pandas as pd
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 
+from numeric_coercion import coerce_numeric_series
+
 
 def _is_blank_cell(value) -> bool:
     if value is None:
@@ -64,7 +66,7 @@ def render_box_and_scatter_chart(
     # 2. 从DataFrame中提取每列数据，并计算全局范围
     for col in df.columns:
         # 使用 pd.to_numeric 过滤非数字内容，再去除NaN值
-        numeric_series = pd.to_numeric(data_df[col], errors="coerce")
+        numeric_series = coerce_numeric_series(data_df[col])
         column_data = numeric_series.dropna().tolist()
 
         y_data_values.append(column_data)
