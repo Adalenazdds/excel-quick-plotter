@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('icon.ico', '.')],
+    datas=[('icon.ico', '.'), ('style.qss', '.')],
     hiddenimports=['pynput', 'pynput.keyboard', 'pynput.keyboard._win32', 'pynput._util.win32', 'keyboard'],
     hookspath=[],
     hooksconfig={},

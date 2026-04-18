@@ -1,0 +1,178 @@
+/*
+  Centralized Qt Style Sheet for EXCEL-Quick-Plotter.
+  Load via QApplication.setStyleSheet(...).
+*/
+
+/* -----------------------------
+   Chart dashboard (multi-plot)
+   ----------------------------- */
+QScrollArea#DashboardScrollArea {
+    background-color: #F4F6F8;
+}
+
+QWidget#DashboardGridContainer {
+    background-color: #F4F6F8;
+}
+
+QFrame[role="chartCard"] {
+    background-color: white;
+    border-radius: 8px;
+    border: 1px solid #D1D8E0;
+}
+
+QLabel[role="chartTitle"] {
+    font-weight: bold;
+    font-size: 13px;
+    color: #2C3E50;
+    border: none;
+}
+
+/* -----------------------------
+   Floating tool window
+   ----------------------------- */
+QFrame#MainFrame {
+    background-color: #F8F9FA;
+    border-radius: 16px;
+    border: 1px solid #E9ECEF;
+}
+
+QLabel#StatusLabel {
+    font-size: 16px;
+    font-weight: 900;
+    color: #2C3E50;
+}
+
+QToolButton#PinButton {
+    background-color: transparent;
+    border-radius: 16px;
+    font-size: 16px;
+}
+QToolButton#PinButton:hover {
+    background-color: #E2E8F0;
+}
+
+QToolButton#ChartButton {
+    background-color: #E2E8F0;
+    border-radius: 16px;
+    font-size: 12px;
+    font-weight: bold;
+    color: #2C3E50;
+}
+QToolButton#ChartButton:hover {
+    background-color: #CBD5E1;
+}
+QToolButton#ChartButton::menu-indicator {
+    image: none;
+}
+
+QCheckBox#OutliersToggle {
+    font-size: 12px;
+    spacing: 4px;
+}
+QCheckBox#OutliersToggle::indicator {
+    width: 32px;
+    height: 16px;
+    border-radius: 8px;
+    background-color: #D1D8E0;
+    image: none;
+}
+QCheckBox#OutliersToggle::indicator:checked {
+    background-color: #EE884C;
+    image: none;
+}
+QCheckBox#OutliersToggle::indicator:unchecked {
+    background-color: #D1D8E0;
+    image: none;
+}
+
+QFrame#InfoCard {
+    background-color: #FFFFFF;
+    border-radius: 12px;
+}
+
+QLabel#InfoTitle {
+    font-size: 14px;
+    font-weight: 800;
+    color: #2C3E50;
+}
+
+QLabel#InfoHint {
+    font-size: 13px;
+    color: #95A5A6;
+}
+
+QLabel#PathLabel {
+    font-size: 11px;
+    color: #BDC3C7;
+    font-family: Consolas, "Courier New";
+}
+
+QPushButton#ActionButton {
+    background-color: #3DC2EC;
+    color: #FFFFFF;
+    font-size: 14px;
+    font-weight: bold;
+    border: none;
+    border-radius: 18px;
+    padding: 10px;
+}
+QPushButton#ActionButton:hover {
+    background-color: #5ED1F4;
+}
+QPushButton#ActionButton:pressed {
+    background-color: #2BAAD4;
+}
+QPushButton#ActionButton:disabled {
+    background-color: #D1D8E0;
+    color: #A5B1C2;
+}
+
+QLabel#HotkeyHintLabel {
+    font-size: 11px;
+    color: #95A5A6;
+}
+
+/* -----------------------------
+   Info pills
+   ----------------------------- */
+QLabel[role="pillPrefix"] {
+    font-size: 13px;
+    font-weight: 700;
+    color: #34495E;
+}
+
+QLabel[role="pillSuffix"] {
+    font-size: 12px;
+    font-weight: 600;
+    color: #7F8C8D;
+}
+
+QLabel[role="pillSeparator"] {
+    font-size: 14px;
+    font-weight: 700;
+    color: #34495E;
+}
+
+QLabel[pillTheme] {
+    font-size: 13px;
+    padding: 4px 14px;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    min-height: 16px;
+}
+
+QLabel[pillTheme="sheet"] {
+    background-color: #C3BEF0;
+    color: #312C57;
+    padding: 4px 18px;
+}
+
+QLabel[pillTheme="range"] {
+    background-color: #A8E6CF;
+    color: #1A4D3A;
+}
+
+QLabel[pillTheme="cells"] {
+    background-color: #FFD3B6;
+    color: #8A3C12;
+}

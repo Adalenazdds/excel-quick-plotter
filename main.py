@@ -62,6 +62,19 @@ def resource_path(relative_path: str) -> str:
     return os.path.join(base_path, relative_path)
 
 
+def apply_app_styles(app: QApplication) -> None:
+    """Load and apply the centralized Qt Style Sheet (QSS) if present."""
+    try:
+        qss_path = resource_path("style.qss")
+        if not os.path.exists(qss_path):
+            return
+        with open(qss_path, "r", encoding="utf-8") as f:
+            app.setStyleSheet(f.read())
+    except Exception:
+        # Styling should never block the app from launching.
+        pass
+
+
 class ExcelFetchWorker(QObject):
     finished = pyqtSignal(object, dict)  # pandas.DataFrame, metadata dict
     failed = pyqtSignal(str)
@@ -208,16 +221,16 @@ class ChartDashboardWindow(QWidget):
 
         # 2. 引入 QScrollArea（核心修改，当图表多时提供滚动条）
         self.scroll_area = QScrollArea(self)
+        self.scroll_area.setObjectName("DashboardScrollArea")
         self.scroll_area.setWidgetResizable(True)  # 允许内部网格自动填充宽度
         self.scroll_area.setFrameShape(QFrame.NoFrame)
-        self.scroll_area.setStyleSheet("QScrollArea { background-color: #F4F6F8; }")
         # 多图时仅内部纵向滚动，避免出现横向滚动条影响观感
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
         # 3. 创建真正装载网格图表的容器 widget
         self.grid_container = QWidget()
-        self.grid_container.setStyleSheet("QWidget { background-color: #F4F6F8; }")
+        self.grid_container.setObjectName("DashboardGridContainer")
         self.grid_layout = QGridLayout(self.grid_container)
         self.grid_layout.setSpacing(15)
         self.grid_layout.setContentsMargins(15, 15, 15, 15)
@@ -236,15 +249,7 @@ class ChartDashboardWindow(QWidget):
         """将生成的图表添加到网格中"""
         container = QFrame()
         # 加个卡片背景，让多图看起来更清爽
-        container.setStyleSheet(
-            """
-            QFrame {
-                background-color: white;
-                border-radius: 8px;
-                border: 1px solid #D1D8E0;
-            }
-        """
-        )
+        container.setProperty("role", "chartCard")
 
         # 【核心修正 2】严格保护图表比例！
         # 设定保底宽度 600 保证横向文字不重叠；设定固定高度 480 拒绝被垂直拉伸
@@ -257,9 +262,7 @@ class ChartDashboardWindow(QWidget):
         title_text = f"[{chart_type.upper()}] {meta.get('sheet_name', '')} | {meta.get('address', '')}"
         title_label = QLabel(title_text)
         title_label.setAlignment(Qt.AlignCenter)
-        title_label.setStyleSheet(
-            "font-weight: bold; font-size: 13px; color: #2C3E50; border: none;"
-        )
+        title_label.setProperty("role", "chartTitle")
 
         vbox.addWidget(title_label)
         vbox.addWidget(toolbar)
@@ -403,13 +406,6 @@ class FloatingToolWindow(QWidget):
 
         self.main_frame = QFrame(self)
         self.main_frame.setObjectName("MainFrame")
-        self.main_frame.setStyleSheet("""
-            QFrame#MainFrame {
-                background-color: #F8F9FA;
-                border-radius: 16px;
-                border: 1px solid #E9ECEF;
-            }
-        """)
         base_layout.addWidget(self.main_frame)
 
         root = QVBoxLayout(self.main_frame)
@@ -423,35 +419,24 @@ class FloatingToolWindow(QWidget):
         top_layout.setSpacing(6)
         
         self.status_label = QLabel("就绪 🎈", self.top_bar)
-        self.status_label.setStyleSheet("font-size:16px; font-weight:900; color:#2C3E50;")
+        self.status_label.setObjectName("StatusLabel")
         self.status_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         self.pin_button = QToolButton(self.top_bar)
+        self.pin_button.setObjectName("PinButton")
         self.pin_button.setCheckable(True)
         self.pin_button.setChecked(True)
         self.pin_button.setToolTip("切换是否置顶")
         self.pin_button.setFixedSize(32, 32)
-        self.pin_button.setStyleSheet("""
-            QToolButton {
-                background-color: transparent; border-radius: 16px; font-size: 16px;
-            }
-            QToolButton:hover { background-color: #E2E8F0; }
-        """)
         self._apply_pin_visual(True)
         self.pin_button.toggled.connect(self._set_always_on_top)
 
         # 修复的图表选择按钮
         self.chart_button = QToolButton(self.top_bar)
+        self.chart_button.setObjectName("ChartButton")
         self.chart_button.setToolTip("选择图表类型")
         # 宽度调大一点以便显示文字和下拉箭头
         self.chart_button.setFixedSize(70, 32) 
-        self.chart_button.setStyleSheet("""
-            QToolButton {
-                background-color: #E2E8F0; border-radius: 16px; font-size: 12px; font-weight: bold; color: #2C3E50;
-            }
-            QToolButton:hover { background-color: #CBD5E1; }
-            QToolButton::menu-indicator { image: none; } /* 隐藏默认的难看的箭头 */
-        """)
         
         # 使用 MenuButtonPopup，点击按钮触发主动作，点击边缘下拉
         # 但为了用户体验一致，我们直接将整个按钮变成触发下拉菜单的入口
@@ -475,31 +460,11 @@ class FloatingToolWindow(QWidget):
 
         # [新增] 高亮离群点开关（仅 Box Plot 显示）
         self.highlight_outliers_toggle = QCheckBox("离群点", self.top_bar)
+        self.highlight_outliers_toggle.setObjectName("OutliersToggle")
         self.highlight_outliers_toggle.setChecked(True)
         self.highlight_outliers_toggle.setCursor(Qt.PointingHandCursor)
         # 让指示器在右侧，更像现代 Toggle Switch
         self.highlight_outliers_toggle.setLayoutDirection(Qt.RightToLeft)
-        self.highlight_outliers_toggle.setStyleSheet("""
-            QCheckBox {
-                font-size: 12px;
-                spacing: 4px;
-            }
-            QCheckBox::indicator {
-                width: 32px;
-                height: 16px;
-                border-radius: 8px;
-                background-color: #D1D8E0;
-                image: none;
-            }
-            QCheckBox::indicator:checked {
-                background-color: #EE884C;
-                image: none;
-            }
-            QCheckBox::indicator:unchecked {
-                background-color: #D1D8E0;
-                image: none;
-            }
-        """)
         self.highlight_outliers_toggle.setVisible(self._chart_type == "box")
 
         top_layout.addWidget(self.status_label)
@@ -511,40 +476,34 @@ class FloatingToolWindow(QWidget):
         # -- 信息展示卡片 --
         self.info_card = QFrame(self.main_frame)
         self.info_card.setObjectName("InfoCard")
-        self.info_card.setStyleSheet("""
-            QFrame#InfoCard {
-                background-color: #FFFFFF;
-                border-radius: 12px;
-            }
-        """)
         info_layout = QVBoxLayout(self.info_card)
         info_layout.setContentsMargins(12, 12, 12, 12)
         info_layout.setSpacing(10)
 
         self.info_title = QLabel("📊 当前活动选区", self.info_card)
-        self.info_title.setStyleSheet("font-size:14px; font-weight:800; color:#2C3E50;")
+        self.info_title.setObjectName("InfoTitle")
         info_layout.addWidget(self.info_title)
 
         self.info_hint = QLabel(self.info_card)
         self.info_hint.setWordWrap(True)
-        self.info_hint.setStyleSheet("font-size:13px; color:#95A5A6;")
+        self.info_hint.setObjectName("InfoHint")
         info_layout.addWidget(self.info_hint)
 
         self.sheet_prefix, self.sheet_pill, _ = self._create_pill_row(
-            info_layout, "工作表：", "SheetPill", "#C3BEF0", "#312C57" 
+            info_layout, "工作表：", pill_theme="sheet"
         )
         
         self.range_prefix, self.range_pill1, self.range_sep, self.range_pill2 = self._create_double_pill_row(
-            info_layout, "范    围：", "Range", "#A8E6CF", "#1A4D3A" 
+            info_layout, "范    围：", pill_theme="range"
         )
         
         self.cells_prefix, self.cells_pill1, self.cells_sep, self.cells_pill2 = self._create_double_pill_row(
-            info_layout, "单元格：", "Cells", "#FFD3B6", "#8A3C12" 
+            info_layout, "单元格：", pill_theme="cells"
         )
 
         self.path_label = QLabel(self.info_card)
         self.path_label.setWordWrap(True)
-        self.path_label.setStyleSheet("font-size:11px; color:#BDC3C7; font-family:Consolas, \"Courier New\";")
+        self.path_label.setObjectName("PathLabel")
         info_layout.addWidget(self.path_label)
 
         self._set_info_placeholder()
@@ -552,27 +511,14 @@ class FloatingToolWindow(QWidget):
 
         # -- 底部高亮主按钮 --
         self.action_button = QPushButton("✨ 提取并作图", self.main_frame)
+        self.action_button.setObjectName("ActionButton")
         self.action_button.setCursor(Qt.PointingHandCursor)
         self.action_button.setToolTip("点击按钮或按全局快捷键 左Alt+K")
-        self.action_button.setStyleSheet("""
-            QPushButton {
-                background-color: #3DC2EC;
-                color: #FFFFFF;
-                font-size: 14px;
-                font-weight: bold;
-                border: none;
-                border-radius: 18px;
-                padding: 10px;
-            }
-            QPushButton:hover { background-color: #5ED1F4; }
-            QPushButton:pressed { background-color: #2BAAD4; }
-            QPushButton:disabled { background-color: #D1D8E0; color: #A5B1C2; }
-        """)
         self.action_button.clicked.connect(self._on_extract_plot_clicked)
         root.addWidget(self.action_button)
 
         self.hotkey_hint_label = QLabel("全局快捷键：左Alt+K", self.main_frame)
-        self.hotkey_hint_label.setStyleSheet("font-size:11px; color:#95A5A6;")
+        self.hotkey_hint_label.setObjectName("HotkeyHintLabel")
         self.hotkey_hint_label.setAlignment(Qt.AlignCenter)
         root.addWidget(self.hotkey_hint_label)
 
@@ -582,74 +528,51 @@ class FloatingToolWindow(QWidget):
         self._pending_hotkey_trigger = True
         self._on_extract_plot_clicked()
 
-    def _create_pill_row(self, parent_layout, label_text, object_name, bg_color, text_color):
+    def _create_pill_row(self, parent_layout, label_text, pill_theme: str):
         row_layout = QHBoxLayout()
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(6)
 
         prefix = QLabel(label_text)
         prefix.setFixedWidth(65)
-        prefix.setStyleSheet("font-size:13px; font-weight:700; color:#34495E;")
+        prefix.setProperty("role", "pillPrefix")
         row_layout.addWidget(prefix)
 
         pill = QLabel()
         pill.setAlignment(Qt.AlignCenter)
-        pill.setObjectName(object_name)
-        pill.setStyleSheet(f"""
-            QLabel#{object_name} {{
-                background-color: {bg_color};
-                color: {text_color};
-                font-size: 13px;
-                padding: 4px 18px;
-                border: 1px solid transparent;
-                border-radius: 12px;
-                min-height: 16px;
-            }}
-        """)
+        pill.setProperty("pillTheme", pill_theme)
         row_layout.addWidget(pill, 0, Qt.AlignVCenter)
 
         suffix = QLabel()
-        suffix.setStyleSheet("font-size:12px; font-weight:600; color:#7F8C8D;")
+        suffix.setProperty("role", "pillSuffix")
         row_layout.addWidget(suffix, 0, Qt.AlignVCenter)
         
         row_layout.addStretch(1)
         parent_layout.addLayout(row_layout)
         return prefix, pill, suffix
 
-    def _create_double_pill_row(self, parent_layout, label_text, obj_name_prefix, bg_color, text_color):
+    def _create_double_pill_row(self, parent_layout, label_text, pill_theme: str):
         row_layout = QHBoxLayout()
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(6)
 
         prefix = QLabel(label_text)
         prefix.setFixedWidth(65)
-        prefix.setStyleSheet("font-size:13px; font-weight:700; color:#34495E;")
+        prefix.setProperty("role", "pillPrefix")
         row_layout.addWidget(prefix)
-
-        pill_style = f"""
-            QLabel {{
-                background-color: {bg_color};
-                color: {text_color};
-                font-size: 13px;
-                padding: 4px 14px;
-                border: 1px solid transparent;
-                border-radius: 12px;
-                min-height: 16px;
-            }}
-        """
 
         pill1 = QLabel()
         pill1.setAlignment(Qt.AlignCenter)
-        pill1.setStyleSheet(pill_style)
+        pill1.setProperty("pillTheme", pill_theme)
         row_layout.addWidget(pill1, 0, Qt.AlignVCenter)
 
         separator = QLabel(":")
-        separator.setStyleSheet("font-size:14px; font-weight:700; color:#34495E;")
+        separator.setProperty("role", "pillSeparator")
         row_layout.addWidget(separator, 0, Qt.AlignVCenter)
 
         pill2 = QLabel()
         pill2.setAlignment(Qt.AlignCenter)
-        pill2.setStyleSheet(pill_style)
+        pill2.setProperty("pillTheme", pill_theme)
         row_layout.addWidget(pill2, 0, Qt.AlignVCenter)
 
         row_layout.addStretch(1)
@@ -1011,6 +934,7 @@ def main():
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     
     app = QApplication(sys.argv)
+    apply_app_styles(app)
     window = FloatingToolWindow()
 
     # Global hotkey (Left Alt+K) triggers the same action as clicking the button.

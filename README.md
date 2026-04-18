@@ -50,5 +50,5 @@ pip install PyQt5 matplotlib pandas numpy xlwings seaborn scipy pynput keyboard
 ## 📁 文件结构
 
 - `main.py`: 项目入口，包含 PyQt5 悬浮窗构建及 xlwings 与 Excel 的通信逻辑。
-- `plotbox.py`: Matplotlib 面向对象绘图模块，负责底层数据图表的拼装与绘制。
+- `style.qss`: Qt 样式表（QSS），集中管理 UI 视觉样式，便于后续增加深色模式。
 - `README.md`: 项目说明文档。
