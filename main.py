@@ -1236,21 +1236,23 @@ class FloatingToolWindow(QWidget):
         copy_action.setToolTip("复制当前图表到剪贴板")
         copy_action.triggered.connect(_copy_plot_to_clipboard)
 
-        # 【新增】双击画布区域极速复制原图，并复用 _copy_plot_to_clipboard 中的气泡提示
+        # 【优化】双击画布区域极速复制原图，强制在鼠标当前精确位置弹出气泡
         def on_canvas_click(event):
             # 确认是鼠标双击，且为左键 (button 1)
             if getattr(event, 'dblclick', False) and getattr(event, 'button', 1) == 1:
                 _copy_plot_to_clipboard(show_tip=False)
-                try:
+                
+                # 【修复核心】使用 QTimer 延时 100 毫秒弹出气泡
+                # 躲开 Matplotlib 的 button_release 和 motion 事件，防止气泡被瞬间秒杀
+                def show_delayed_tip():
                     try:
                         pos = QCursor.pos()
+                        # 仅使用 pos 确保全局绝对定位生效
+                        QToolTip.showText(pos, "✨ 图表已复制！")
                     except Exception:
-                        pos = canvas.mapToGlobal(QPoint(20, 20))
-
-                    # 锚定到画布控件，避免某些平台/样式下不显示
-                    QToolTip.showText(pos, "✨ 图表已复制！", canvas, canvas.rect(), 1500)
-                except Exception:
-                    pass
+                        pass
+                
+                QTimer.singleShot(100, show_delayed_tip)
                 
         canvas.mpl_connect('button_press_event', on_canvas_click)
 
