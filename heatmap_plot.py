@@ -7,6 +7,7 @@ import pandas as pd
 import matplotlib.cm as cm
 from matplotlib.colors import Normalize
 from matplotlib.figure import Figure
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from numeric_coercion import normalize_numeric_like
 
@@ -78,8 +79,8 @@ def render_heatmap_chart(fig: Figure, df: pd.DataFrame, sheet_name: str = "Data"
 
 	ax = fig.add_subplot(111)
 
-	fig.subplots_adjust(left=0.06, right=0.88, top=0.90, bottom=0.06)
-	fig.suptitle(f"Heatmap - {sheet_name}", fontsize=14, fontweight="bold", y=0.97)
+	# 【修正 1】移除硬编码的 subplots_adjust，避免非对称边距导致整体偏右
+	fig.suptitle(f"Heatmap - {sheet_name}", fontsize=14, fontweight="bold", y=0.95)
 
 	cmap_base = cm.get_cmap("Blues")
 	cmap = copy.copy(cmap_base)
@@ -103,7 +104,12 @@ def render_heatmap_chart(fig: Figure, df: pd.DataFrame, sheet_name: str = "Data"
 	ax.set_xlim(-0.5, cols - 0.5)
 	ax.set_ylim(rows - 0.5, -0.5)
 
-	cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.02)
+	# 【修正 2】使用 make_axes_locatable 完美绑定 Heatmap 与 Colorbar，确保作为一个整体居中
+	divider = make_axes_locatable(ax)
+	# 在 heatmap 的右侧划出 5% 的宽度，间距 0.15 放置 colorbar
+	cax = divider.append_axes("right", size="5%", pad=0.15)
+
+	cbar = fig.colorbar(im, cax=cax)
 	cbar.ax.tick_params(labelsize=9)
 
 	# Clean look: hide ticks and labels by default.
