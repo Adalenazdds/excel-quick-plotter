@@ -755,11 +755,11 @@ class FloatingToolWindow(QWidget):
         self.action_button = QPushButton("✨ 提取并作图", self.main_frame)
         self.action_button.setObjectName("ActionButton")
         self.action_button.setCursor(Qt.PointingHandCursor)
-        self.action_button.setToolTip("点击按钮或按全局快捷键 左Alt+K")
+        self.action_button.setToolTip("点击按钮或按全局快捷键 右Alt+K")
         self.action_button.clicked.connect(self._on_extract_plot_clicked)
         root.addWidget(self.action_button)
 
-        self.hotkey_hint_label = QLabel("全局快捷键：左Alt+K", self.main_frame)
+        self.hotkey_hint_label = QLabel("全局快捷键：右Alt+K", self.main_frame)
         self.hotkey_hint_label.setObjectName("HotkeyHintLabel")
         self.hotkey_hint_label.setAlignment(Qt.AlignCenter)
         root.addWidget(self.hotkey_hint_label)
