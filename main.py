@@ -62,6 +62,7 @@ from scatter_plot import render_scatter_kde_chart
 from scatter_plot_multi import render_multi_scatter_kde_chart
 from line_plot import render_line_chart
 from heatmap_plot import render_heatmap_chart, coerce_numeric_matrix
+from pareto_plot import render_pareto_chart
 
 try:
     import pythoncom as _pythoncom
@@ -686,12 +687,15 @@ class FloatingToolWindow(QWidget):
         action_multi = chart_menu.addAction("Scatter (多组)")
         action_heatmap = chart_menu.addAction("Heatmap")
         action_line = chart_menu.addAction("Line Plot (多行)")
+        # 原有 action 之下
+        action_pareto = chart_menu.addAction("Pareto (二八法则)")
         
         action_box.triggered.connect(lambda: self._set_chart_type("box"))
         action_scatter.triggered.connect(lambda: self._set_chart_type("scatter"))
         action_multi.triggered.connect(lambda: self._set_chart_type("multi"))
         action_heatmap.triggered.connect(lambda: self._set_chart_type("heatmap"))
         action_line.triggered.connect(lambda: self._set_chart_type("line"))
+        action_pareto.triggered.connect(lambda: self._set_chart_type("pareto"))
         
         self.chart_button.setMenu(chart_menu)
         self._apply_chart_visual()
@@ -839,11 +843,12 @@ class FloatingToolWindow(QWidget):
             "multi": "Multi ▾",
             "heatmap": "Heatmap ▾",
             "line": "Line ▾",
+            "pareto": "Pareto ▾",  # 新增
         }
         self.chart_button.setText(text_map.get(self._chart_type, "图表 ▾"))
 
     def _set_chart_type(self, chart_type: str) -> None:
-        if chart_type not in ("box", "scatter", "multi", "heatmap", "line"):
+        if chart_type not in ("box", "scatter", "multi", "heatmap", "line", "pareto"):
             return
         self._chart_type = chart_type
         self._apply_chart_visual()
@@ -1351,6 +1356,14 @@ class FloatingToolWindow(QWidget):
                 render_line_chart(fig, df, sheet_name=meta.get("sheet_name", "Data"))
             elif self._chart_type == "heatmap":
                 render_heatmap_chart(fig, df, sheet_name=meta.get("sheet_name", "Data"))
+            elif self._chart_type == "pareto":
+                ax = fig.add_subplot(111)
+                render_pareto_chart(
+                    ax, 
+                    df, 
+                    sheet_name=meta.get("sheet_name", "Data"), 
+                    excel_start_row=meta.get("excel_start_row")
+                )
         except Exception as exc:
             fig.clear()
             ax = fig.add_subplot(111)
