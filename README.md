@@ -83,15 +83,14 @@ python main.py
 
 ## 📦 打包（PyInstaller）
 
-- **目录分发（onedir）**：
+- **单文件（onefile，等价于 `-F`）**：
   ```bash
-  pyinstaller EXCEL-Quick-Plotter.spec
+  pyinstaller --noconfirm --clean EXCEL-Quick-Plotter.spec
   ```
 
-- **单文件（onefile）**：
-  ```bash
-  pyinstaller build_onefile/EXCEL-Quick-Plotter.spec
-  ```
+  产物默认在：`dist/EXCEL-Quick-Plotter.exe`
+
+  > 说明：当你使用 `.spec` 构建时，是否 onefile/onedir 由 spec 结构决定；因此通常不需要额外加 `-F/-D` 参数。
 
 打包配置已包含 `icon.ico` 与 `style.qss`，以及 `keyboard/pynput/mplcursors` 等隐藏依赖。
 
@@ -101,4 +100,4 @@ python main.py
 - `box_plot.py` / `scatter_plot.py` / `scatter_plot_multi.py` / `heatmap_plot.py` / `line_plot.py`：各类图表渲染逻辑。
 - `numeric_coercion.py`：数值清洗与强制转换工具。
 - `style.qss`：Qt 样式表。
-- `EXCEL-Quick-Plotter.spec`：PyInstaller onedir 打包配置。
+- `EXCEL-Quick-Plotter.spec`：PyInstaller onefile（单文件）打包配置。
