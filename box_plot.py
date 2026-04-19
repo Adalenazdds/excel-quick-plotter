@@ -318,11 +318,25 @@ def render_box_and_scatter_chart(
         if scatter_artists:
             cursor = mplcursors.cursor(scatter_artists, hover=True)
 
+            try:
+                setattr(ax.figure, "_eqp_mplcursors_annotations", [])
+            except Exception:
+                pass
+
             @cursor.connect("add")
             def _on_add(sel):
                 meta = getattr(sel.artist, "_eqp_meta", None)
                 if not meta:
                     return
+
+                try:
+                    ann_list = getattr(ax.figure, "_eqp_mplcursors_annotations", None)
+                    if ann_list is None:
+                        ann_list = []
+                        setattr(ax.figure, "_eqp_mplcursors_annotations", ann_list)
+                    ann_list.append(sel.annotation)
+                except Exception:
+                    pass
                 idx = int(sel.index)
                 rows = meta.get("rows")
                 values = meta.get("values")

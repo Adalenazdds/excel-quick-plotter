@@ -143,10 +143,26 @@ def render_pareto_chart(
             setattr(bar, "_eqp_meta", {"label": labels[i], "value": values[i], "cum_pct": cum_pct[i]})
 
         cursor = mplcursors.cursor(bars, hover=True)
+
+        try:
+            setattr(ax.figure, "_eqp_mplcursors_annotations", [])
+        except Exception:
+            pass
+
         @cursor.connect("add")
         def _on_add(sel):
             meta = getattr(sel.artist, "_eqp_meta", None)
             if not meta: return
+
+            try:
+                ann_list = getattr(ax.figure, "_eqp_mplcursors_annotations", None)
+                if ann_list is None:
+                    ann_list = []
+                    setattr(ax.figure, "_eqp_mplcursors_annotations", ann_list)
+                ann_list.append(sel.annotation)
+            except Exception:
+                pass
+
             sel.annotation.set_text(
                 f"Category: {meta['label']}\n"
                 f"Value: {meta['value']:g}\n"

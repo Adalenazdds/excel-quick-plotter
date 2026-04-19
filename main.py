@@ -1240,6 +1240,59 @@ class FloatingToolWindow(QWidget):
                 except Exception:
                     pass
 
+        # 【新增】一键取消黄色悬浮标签（mplcursors 注释）
+        def _clear_hover_labels(show_tip: bool = True) -> None:
+            try:
+                cursor = getattr(fig, "_eqp_mplcursors_cursor", None)
+                if cursor is not None:
+                    try:
+                        for sel in list(getattr(cursor, "selections", []) or []):
+                            try:
+                                cursor.remove_selection(sel)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
+                annotations = getattr(fig, "_eqp_mplcursors_annotations", None)
+                if annotations:
+                    for ann in list(annotations):
+                        try:
+                            ann.remove()
+                        except Exception:
+                            try:
+                                ann.set_visible(False)
+                            except Exception:
+                                pass
+                try:
+                    setattr(fig, "_eqp_mplcursors_annotations", [])
+                except Exception:
+                    pass
+
+                try:
+                    canvas.draw_idle()
+                except Exception:
+                    try:
+                        canvas.draw()
+                    except Exception:
+                        pass
+
+                if show_tip:
+                    try:
+                        QToolTip.showText(QCursor.pos(), "已取消黄色标签", toolbar)
+                    except Exception:
+                        pass
+            except Exception as e:
+                try:
+                    QToolTip.showText(QCursor.pos(), f"取消标签失败: {e}", toolbar)
+                except Exception:
+                    pass
+
+        clear_label_action = toolbar.addAction("取消标签")
+        clear_label_action.setToolTip("一键取消当前图的黄色悬浮标签")
+        clear_label_action.triggered.connect(_clear_hover_labels)
+
+        # 追加“复制图片”按钮（复制当前图表到剪贴板）
         copy_action = toolbar.addAction("复制图片")
         copy_action.setToolTip("复制当前图表到剪贴板")
         copy_action.triggered.connect(_copy_plot_to_clipboard)
@@ -1265,15 +1318,31 @@ class FloatingToolWindow(QWidget):
         canvas.mpl_connect('button_press_event', on_canvas_click)
 
         # 【新增】图表任意门：按住左键拖拽图表，直接输出到微信或文件夹
+        # 为避免与 mplcursors 黄色标签的“拖动移动”冲突，仅允许在画布最右侧小区域触发拖拽导出。
         drag_state = {'pressed': False, 'x': 0, 'y': 0}
+
+        def _in_right_drag_zone(event) -> bool:
+            try:
+                if event is None or event.x is None:
+                    return False
+                w = int(canvas.get_width_height()[0])
+                if w <= 0:
+                    return False
+
+                zone_px = 120  # 右侧触发区宽度（像素）
+                return int(event.x) >= (w - zone_px)
+            except Exception:
+                return False
 
         def on_press(event):
             # 仅在左键按下、非双击、且没有使用放大镜/拖动工具时触发
             if getattr(event, 'button', 1) == 1 and not getattr(event, 'dblclick', False):
                 if toolbar.mode == '':  # 确保不是在进行缩放/平移操作
-                    drag_state['pressed'] = True
-                    drag_state['x'] = event.x
-                    drag_state['y'] = event.y
+                    # 仅允许从画布最右侧区域开始拖拽导出，避免影响黄色标签拖动
+                    if _in_right_drag_zone(event):
+                        drag_state['pressed'] = True
+                        drag_state['x'] = event.x
+                        drag_state['y'] = event.y
 
         def on_release(event):
             drag_state['pressed'] = False
