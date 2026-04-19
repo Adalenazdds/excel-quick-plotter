@@ -2,6 +2,7 @@ import os
 import sys
 import traceback
 import io
+import tempfile
 from io import StringIO
 from typing import Optional
 
@@ -18,6 +19,8 @@ from PyQt5.QtCore import (
     QSettings,
 )
 from PyQt5.QtGui import QCursor, QMouseEvent, QIcon, QImage, QColor
+from PyQt5.QtCore import QUrl, QMimeData
+from PyQt5.QtGui import QDrag, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -1255,6 +1258,66 @@ class FloatingToolWindow(QWidget):
                 QTimer.singleShot(100, show_delayed_tip)
                 
         canvas.mpl_connect('button_press_event', on_canvas_click)
+
+        # 【新增】图表任意门：按住左键拖拽图表，直接输出到微信或文件夹
+        drag_state = {'pressed': False, 'x': 0, 'y': 0}
+
+        def on_press(event):
+            # 仅在左键按下、非双击、且没有使用放大镜/拖动工具时触发
+            if getattr(event, 'button', 1) == 1 and not getattr(event, 'dblclick', False):
+                if toolbar.mode == '':  # 确保不是在进行缩放/平移操作
+                    drag_state['pressed'] = True
+                    drag_state['x'] = event.x
+                    drag_state['y'] = event.y
+
+        def on_release(event):
+            drag_state['pressed'] = False
+
+        def on_motion(event):
+            if not drag_state['pressed']:
+                return
+            if event.x is None or event.y is None:
+                return
+
+            dx = event.x - drag_state['x']
+            dy = event.y - drag_state['y']
+            
+            # 当拖动距离超过 15 个像素时，正式判定为“拖拽”操作
+            if (dx**2 + dy**2)**0.5 > 15:
+                drag_state['pressed'] = False  # 防止重复触发
+
+                try:
+                    # 1. 构造一个优雅的文件名
+                    s_name = str(meta.get("sheet_name", "Data"))
+                    addr = str(meta.get("address", "Range")).replace("$", "").replace(":", "_")
+                    safe_name = "".join(c for c in f"{self._chart_type}_{s_name}_{addr}" if c.isalnum() or c in "_-").strip()
+                    temp_path = os.path.join(tempfile.gettempdir(), f"{safe_name}.png")
+
+                    # 2. 将高清图表静默保存到系统临时目录
+                    canvas.figure.savefig(temp_path, format="png", dpi=250, bbox_inches="tight", facecolor="white")
+
+                    # 3. 封装拖拽数据 (同时塞入文件路径和图片数据，通吃所有软件)
+                    drag = QDrag(canvas)
+                    mime = QMimeData()
+                    mime.setUrls([QUrl.fromLocalFile(temp_path)])
+                    
+                    image = QImage(temp_path)
+                    mime.setImageData(image)
+                    drag.setMimeData(mime)
+
+                    # 4. 设置拖拽时的跟随缩略图，提升视觉物理手感
+                    pixmap = QPixmap.fromImage(image).scaledToWidth(200, Qt.SmoothTransformation)
+                    drag.setPixmap(pixmap)
+                    drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
+
+                    # 5. 执行拖拽动作
+                    drag.exec_(Qt.CopyAction)
+                except Exception as e:
+                    print(f"Drag drop failed: {e}")
+
+        canvas.mpl_connect('button_press_event', on_press)
+        canvas.mpl_connect('button_release_event', on_release)
+        canvas.mpl_connect('motion_notify_event', on_motion)
 
         try:
             if self._chart_type == "box":
