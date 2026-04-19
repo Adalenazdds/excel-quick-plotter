@@ -117,8 +117,8 @@ def render_multi_scatter_kde_chart(
     if fig.get_size_inches().min() <= 0:
         fig.set_size_inches(10, 8)
 
-    # 布局参数：右侧留白 15% 给 Colorbar
-    fig.subplots_adjust(left=0.08, right=0.85, top=0.90, bottom=0.10)
+    # 布局参数：右侧留白给 Colorbar；适当增加 bottom/top 留白避免元素被裁切
+    fig.subplots_adjust(left=0.08, right=0.85, top=0.91, bottom=0.13)
     fig.suptitle(f"Scatter Density (Multi-Group) - {sheet_name}", fontsize=14, fontweight='bold', y=0.96)
 
     # -----------------------------------------------------------
@@ -126,7 +126,8 @@ def render_multi_scatter_kde_chart(
     # -----------------------------------------------------------
     gs = fig.add_gridspec(
         4, 4,
-        width_ratios=[1, 1, 1, 0.3],  # 缩窄右侧直方图宽度
+        # 右上角专属图例区域需要更宽，避免文字被裁切
+        width_ratios=[1, 1, 1, 0.55],
         height_ratios=[0.3, 1, 1, 1], # 缩窄顶部直方图高度
         wspace=0.05,  # 缩小水平间距
         hspace=0.05,  # 缩小垂直间距

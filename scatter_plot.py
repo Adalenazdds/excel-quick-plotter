@@ -104,7 +104,8 @@ def render_scatter_kde_chart(
         fig.set_size_inches(10, 8)
 
     # 1. 设置画布预留空间: 给顶部(top)留空间放主标题, 右侧(right)留出15%的空间放色标(colorbar)
-    fig.subplots_adjust(left=0.08, right=0.85, top=0.90, bottom=0.10)
+    # 适当增加 bottom/top 留白，避免图例与轴标签被裁切
+    fig.subplots_adjust(left=0.08, right=0.85, top=0.91, bottom=0.13)
 
     # 2. 将标题放在全局最顶端，而不是主图坐标轴内，避免和 top 直方图重叠
     fig.suptitle(f"Scatter Density - {sheet_name}", fontsize=14, fontweight='bold', y=0.96)
@@ -113,7 +114,8 @@ def render_scatter_kde_chart(
     gs = fig.add_gridspec(
         4,
         4,
-        width_ratios=[1, 1, 1, 0.4],
+        # 右上角预留一格专门放图例，略微加宽避免文字被裁切
+        width_ratios=[1, 1, 1, 0.55],
         height_ratios=[0.4, 1, 1, 1],
         wspace=0.08, 
         hspace=0.08,
@@ -122,6 +124,8 @@ def render_scatter_kde_chart(
     ax_top = fig.add_subplot(gs[0, 0:3])
     ax_main = fig.add_subplot(gs[1:4, 0:3])
     ax_right = fig.add_subplot(gs[1:4, 3], sharey=ax_main)
+    ax_legend = fig.add_subplot(gs[0, 3])
+    ax_legend.axis("off")
 
     # KDE 主图
     for g in groups:
@@ -187,7 +191,9 @@ def render_scatter_kde_chart(
     ax_top.set_xlabel("")
     ax_top.set_ylabel("Freq", fontsize=10)
     if len(groups) > 1:
-        ax_top.legend(loc="upper right", frameon=False)
+        handles, labels = ax_top.get_legend_handles_labels()
+        # 将图例放到右上角空白网格，避免与顶部直方图叠加/裁切
+        ax_legend.legend(handles, labels, loc="center", frameon=False, fontsize=10)
     ax_top.spines["top"].set_visible(False)
     ax_top.spines["right"].set_visible(False)
     # 底部边框也隐藏一下，让图表衔接更现代
@@ -206,7 +212,8 @@ def render_scatter_kde_chart(
         )
     ax_right.tick_params(labelleft=False)
     ax_right.set_ylabel("")
-    ax_right.set_xlabel("Freq", fontsize=10)
+    # 减小 labelpad，避免底部被裁切
+    ax_right.set_xlabel("Freq", fontsize=10, labelpad=2)
     ax_right.spines["top"].set_visible(False)
     ax_right.spines["right"].set_visible(False)
     ax_right.spines["left"].set_visible(False)
