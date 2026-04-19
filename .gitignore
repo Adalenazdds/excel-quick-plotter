@@ -37,3 +37,6 @@ dist_onefile/
 Thumbs.db
 ~$*.xlsx
 ~$*.xlsm
+
+#面向白盒测试
+instruction.md
