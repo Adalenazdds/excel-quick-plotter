@@ -7,7 +7,16 @@ from typing import Optional
 
 import pandas as pd
 import xlwings as xw
-from PyQt5.QtCore import QObject, QPoint, Qt, QThread, pyqtSignal, QTimer, QPropertyAnimation
+from PyQt5.QtCore import (
+    QObject,
+    QPoint,
+    Qt,
+    QThread,
+    pyqtSignal,
+    QTimer,
+    QPropertyAnimation,
+    QSettings,
+)
 from PyQt5.QtGui import QCursor, QMouseEvent, QIcon, QImage, QColor
 from PyQt5.QtWidgets import (
     QApplication,
@@ -339,9 +348,19 @@ class ChartDashboardWindow(QWidget):
         if self.grid_layout.count() == 0:
             return
 
-        folder = QFileDialog.getExistingDirectory(self, "选择保存目录")
-        if not folder:
+        settings = QSettings("DataAnalysisTools", "ExcelQuickPlotter")
+        last_export_dir = settings.value("last_export_dir", "", type=str) or ""
+        if last_export_dir and os.path.exists(last_export_dir):
+            default_dir = last_export_dir
+        else:
+            default_dir = ""
+
+        folder = QFileDialog.getExistingDirectory(self, "选择保存目录", default_dir)
+        if not folder or not os.path.exists(folder):
             return
+
+        folder = os.path.abspath(folder)
+        settings.setValue("last_export_dir", folder)
 
         saved_count = 0
         # 遍历网格中的所有卡片
@@ -483,6 +502,14 @@ class _GlobalHotkeyManager:
         if _keyboard is not None:
             try:
                 def _on_activate() -> None:
+                    # Force-release modifier keys ASAP to avoid Windows thinking
+                    # Alt is still held if the UI thread becomes busy (e.g. matplotlib).
+                    try:
+                        _keyboard.release('alt')
+                        _keyboard.release('left alt')
+                    except Exception:
+                        pass
+
                     try:
                         self._bridge.triggered.emit()
                     except Exception:
@@ -729,6 +756,15 @@ class FloatingToolWindow(QWidget):
         self.hotkey_hint_label.setObjectName("HotkeyHintLabel")
         self.hotkey_hint_label.setAlignment(Qt.AlignCenter)
         root.addWidget(self.hotkey_hint_label)
+
+        # --- 在 _init_ui 结尾处添加 ---
+        # 默认初始化为折叠（胶囊）形态
+        self.info_card.setVisible(False)
+        self.action_button.setVisible(False)
+        self.hotkey_hint_label.setVisible(False)
+
+        # 强制触发布局计算，让窗口立即收缩
+        self.adjustSize()
 
     def _on_hotkey_triggered(self) -> None:
         # Mark this extraction as hotkey-originated so the chart window can be
@@ -1135,6 +1171,10 @@ class FloatingToolWindow(QWidget):
                 pass
             thread.quit()
             thread.wait(1500)
+
+        # Ensure we actually exit the app event loop so `aboutToQuit` fires and
+        # global hooks are released (prevents zombie background processes).
+        QApplication.quit()
         super().closeEvent(event)
 
     def _show_chart_window(self, df, meta) -> None:
