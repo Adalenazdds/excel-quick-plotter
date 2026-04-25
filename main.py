@@ -408,9 +408,22 @@ class ChartDashboardWindow(QWidget):
         container.setProperty("role", "chartCard")
 
         # 【核心修正 2】严格保护图表比例！
-        # 设定保底宽度 600 保证横向文字不重叠；设定固定高度 480 拒绝被垂直拉伸
+        # 设定保底宽度 600 保证横向文字不重叠；高度随实际图形尺寸自适应，避免底部标签被截断
         container.setMinimumWidth(600)
-        container.setFixedHeight(480)
+
+        try:
+            fig_height_px = int(canvas.figure.get_figheight() * canvas.figure.dpi)
+        except Exception:
+            fig_height_px = 480
+
+        try:
+            toolbar_height_px = int(toolbar.sizeHint().height())
+        except Exception:
+            toolbar_height_px = 40
+
+        container_min_height = max(520, fig_height_px + toolbar_height_px + 72)
+        container.setMinimumHeight(container_min_height)
+        container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
         vbox = QVBoxLayout(container)
         vbox.setContentsMargins(10, 10, 10, 10)
@@ -1440,7 +1453,8 @@ class FloatingToolWindow(QWidget):
             print(f"[UI] render failed: {exc}")
 
         try:
-            fig.tight_layout()
+            if self._chart_type != "box":
+                fig.tight_layout()
         except Exception:
             pass
 

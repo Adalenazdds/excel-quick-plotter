@@ -62,6 +62,26 @@ def render_box_and_scatter_chart(
                 x_labels.append(str(col))
         data_df = df
 
+    longest_label_length = max((len(str(label)) for label in x_labels), default=0)
+    column_count = max(len(x_labels), 1)
+    fig = ax.figure
+
+    base_width = 6.5
+    base_height = 4.8
+    figure_width = max(base_width, base_width + column_count * 1.5)
+    figure_height = base_height + max(0, longest_label_length - 10) * 0.18 + max(0, column_count - 4) * 0.08
+
+    try:
+        fig.set_size_inches(figure_width, figure_height, forward=True)
+    except Exception:
+        pass
+
+    bottom_margin = min(0.4, max(0.2, 0.18 + longest_label_length * 0.005))
+    try:
+        fig.subplots_adjust(bottom=bottom_margin, top=0.78, right=0.8)
+    except Exception:
+        pass
+
     y_data_values = []
     y_data_rows = []
     all_data = []
@@ -229,7 +249,7 @@ def render_box_and_scatter_chart(
         )
 
         # 动态放置文字标识于全局最大值上方，防止与数据重叠或互相挤压
-        text_y_pos = global_max + 0.10 * data_padding
+        text_y_pos = global_max + 0.2 * data_padding
         
         ax.text(
             x_positions[i],
@@ -243,7 +263,13 @@ def render_box_and_scatter_chart(
 
     # 7. 设置Axes细节
     ax.set_xticks(x_positions)
-    ax.set_xticklabels(x_labels, rotation=-45, ha="left", fontsize=10)
+    ax.set_xticklabels(
+        x_labels,
+        rotation=45,
+        ha="right",
+        rotation_mode="anchor",
+        fontsize=10,
+    )
     ax.xaxis.grid(True, linestyle="-", which="major", color="lightgrey", alpha=0.5)
     ax.xaxis.set_ticks_position('bottom')
 
@@ -254,7 +280,7 @@ def render_box_and_scatter_chart(
     ax.set_ylim(global_min - 0.1 * data_padding, global_max + 0.45 * data_padding)
     
     ax.yaxis.grid(True, linestyle="-", which="major", color="lightgrey", alpha=0.5)
-    ax.set_title(f"Data Analysis_{sheet_name}", fontsize=14)
+    ax.set_title(f"Data Analysis_{sheet_name}", fontsize=14, pad=14)
 
     # 8. 图例配置
     legend_elements = [
@@ -299,9 +325,6 @@ def render_box_and_scatter_chart(
     for spine in ax.spines.values():
         spine.set_color("black")
         spine.set_linewidth(1)
-        
-    # 关键追加：因为图例被移到了画布外部，需要让图表自动调整布局以防图例被窗口边缘裁切
-    ax.figure.tight_layout()
 
     # 9. 基础交互：鼠标悬浮查看数据点
     # 注意：渲染函数可能被反复调用，需避免重复叠加 cursor
