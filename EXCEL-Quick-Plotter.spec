@@ -1,16 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-import os
-
-project_dir = os.path.abspath(SPECPATH)
-
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[(os.path.join(project_dir, 'icon.ico'), '.'), (os.path.join(project_dir, 'style.qss'), '.')],
-    hiddenimports=['pynput', 'pynput.keyboard', 'pynput.keyboard._win32', 'pynput._util.win32', 'keyboard', 'mplcursors'],
+    datas=[('style.qss', '.')],
+    hiddenimports=['keyboard', 'pynput', 'pynput.keyboard', 'pynput.keyboard._win32', 'pythoncom', 'pywintypes', 'mplcursors'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -39,5 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=[os.path.join(project_dir, 'icon.ico')],
+    icon=['icon.ico'],
 )
